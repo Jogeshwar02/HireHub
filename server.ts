@@ -38,6 +38,9 @@ if (!GoogleGenAIClass || (typeof GoogleGenAIClass !== 'function' && (GoogleGenAI
 console.log('[Init] pdfParse function resolved. Type:', typeof pdfParse);
 console.log('[Init] GoogleGenAI resolved. Type:', typeof GoogleGenAIClass);
 
+// Test commit - deployment check
+console.log('[Init] Server starting with deployment verification');
+
 dotenv.config();
 
 const __filename = fileURLToPath(import.meta.url);
