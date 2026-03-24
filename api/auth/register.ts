@@ -6,11 +6,16 @@ import { getFirebase } from '../../firebaseAdmin.js';
 
 const JWT_SECRET = process.env.JWT_SECRET || 'hirehub-super-secret-key';
 const THIRTY_DAYS = 30 * 24 * 60 * 60 * 1000;
-const DB_PATH = process.env.SQLITE_DB_PATH || 'hirehub.db';
+let sqliteDb: Database.Database | null = null;
 
-const db = new Database(DB_PATH);
+function getSqliteDb() {
+  if (sqliteDb) return sqliteDb;
 
-db.exec(`
+  try {
+    const dbPath = process.env.SQLITE_DB_PATH || '/tmp/hirehub.db';
+    sqliteDb = new Database(dbPath);
+
+    sqliteDb.exec(`
 CREATE TABLE IF NOT EXISTS users (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   email TEXT UNIQUE NOT NULL,
@@ -21,7 +26,7 @@ CREATE TABLE IF NOT EXISTS users (
 );
 `);
 
-db.exec(`
+    sqliteDb.exec(`
 CREATE TABLE IF NOT EXISTS student_profiles (
   user_id INTEGER PRIMARY KEY,
   name TEXT,
@@ -30,7 +35,7 @@ CREATE TABLE IF NOT EXISTS student_profiles (
 );
 `);
 
-db.exec(`
+    sqliteDb.exec(`
 CREATE TABLE IF NOT EXISTS recruiter_profiles (
   user_id INTEGER PRIMARY KEY,
   company_name TEXT,
@@ -40,7 +45,7 @@ CREATE TABLE IF NOT EXISTS recruiter_profiles (
 );
 `);
 
-db.exec(`
+    sqliteDb.exec(`
 CREATE TABLE IF NOT EXISTS notifications (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   user_id INTEGER,
@@ -53,6 +58,13 @@ CREATE TABLE IF NOT EXISTS notifications (
   FOREIGN KEY(user_id) REFERENCES users(id)
 );
 `);
+
+    return sqliteDb;
+  } catch (err) {
+    console.error('SQLite initialization error:', err);
+    return null;
+  }
+}
 
 async function createNotification(userId: number | string, type: string, title: string, content: string, link?: string) {
   const { db: firestore } = getFirebase();
@@ -74,6 +86,8 @@ async function createNotification(userId: number | string, type: string, title: 
   }
 
   try {
+    const db = getSqliteDb();
+    if (!db) return;
     db.prepare(
       'INSERT INTO notifications (user_id, type, title, content, link) VALUES (?, ?, ?, ?, ?)'
     ).run(Number(userId), type, title, content, link || null);
@@ -135,6 +149,11 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     }
 
     // fallback sqlite
+    const db = getSqliteDb();
+    if (!db) {
+      return res.status(500).json({ error: 'Database unavailable and Firebase is not configured' });
+    }
+
     const exists = db.prepare('SELECT * FROM users WHERE email = ?').get(email);
     if (exists) {
       return res.status(400).json({ error: 'User already exists' });

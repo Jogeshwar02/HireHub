@@ -6,9 +6,19 @@ import { getFirebase } from '../../firebaseAdmin.js';
 
 const JWT_SECRET = process.env.JWT_SECRET || 'hirehub-super-secret-key';
 const THIRTY_DAYS = 30 * 24 * 60 * 60 * 1000;
-const DB_PATH = process.env.SQLITE_DB_PATH || 'hirehub.db';
+let sqliteDb: Database.Database | null = null;
 
-const db = new Database(DB_PATH);
+function getSqliteDb() {
+  if (sqliteDb) return sqliteDb;
+  try {
+    const dbPath = process.env.SQLITE_DB_PATH || '/tmp/hirehub.db';
+    sqliteDb = new Database(dbPath);
+    return sqliteDb;
+  } catch (err) {
+    console.error('SQLite initialization error:', err);
+    return null;
+  }
+}
 
 export default async function handler(req: VercelRequest, res: VercelResponse) {
   if (req.method !== 'POST') {
@@ -36,6 +46,11 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       const token = jwt.sign({ id: doc.id, email, role: data.role }, JWT_SECRET, { expiresIn: '30d' });
       res.setHeader('Set-Cookie', `token=${token}; HttpOnly; Path=/; Max-Age=${THIRTY_DAYS / 1000}; Secure; SameSite=None`);
       return res.status(200).json({ user: { id: doc.id, email: data.email, role: data.role, username: data.username } });
+    }
+
+    const db = getSqliteDb();
+    if (!db) {
+      return res.status(500).json({ error: 'Database unavailable and Firebase is not configured' });
     }
 
     const user: any = db.prepare('SELECT * FROM users WHERE email = ?').get(email);
