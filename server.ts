@@ -9,7 +9,34 @@ import cookieParser from 'cookie-parser';
 import dotenv from 'dotenv';
 import multer from 'multer';
 import fs from 'fs';
+import { createRequire } from 'module';
+const require = createRequire(import.meta.url);
+let pdfParse: any;
+try {
+  const mod = require('pdf-parse');
+  if (typeof mod === 'function') {
+    pdfParse = mod;
+  } else if (mod && typeof mod.default === 'function') {
+    pdfParse = mod.default;
+  } else if (mod && typeof mod.pdf === 'function') {
+    pdfParse = mod.pdf;
+  } else {
+    pdfParse = mod;
+  }
+} catch (e) {
+  console.error('Failed to load pdf-parse:', e);
+}
+import { GoogleGenAI } from '@google/genai';
 import { getFirebase } from './firebaseAdmin.js';
+
+// Robust GoogleGenAI initialization
+let GoogleGenAIClass: any = GoogleGenAI;
+if (!GoogleGenAIClass || (typeof GoogleGenAIClass !== 'function' && (GoogleGenAIClass as any).GoogleGenAI)) {
+  GoogleGenAIClass = (GoogleGenAIClass as any).GoogleGenAI;
+}
+
+console.log('[Init] pdfParse function resolved. Type:', typeof pdfParse);
+console.log('[Init] GoogleGenAI resolved. Type:', typeof GoogleGenAIClass);
 
 dotenv.config();
 
@@ -42,10 +69,11 @@ const upload = multer({
   storage,
   limits: { fileSize: 10 * 1024 * 1024 }, // 10MB limit
   fileFilter: (req, file, cb) => {
-    if (file.mimetype === 'application/pdf') {
+    const allowedMimeTypes = ['application/pdf', 'image/jpeg', 'image/png', 'image/gif', 'image/webp'];
+    if (allowedMimeTypes.includes(file.mimetype)) {
       cb(null, true);
     } else {
-      cb(new Error('Only PDF files are allowed'));
+      cb(new Error('Only PDF and image files are allowed'));
     }
   }
 });
@@ -59,21 +87,51 @@ db.exec(`
   CREATE TABLE IF NOT EXISTS users (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     email TEXT UNIQUE NOT NULL,
+    username TEXT UNIQUE,
     password TEXT NOT NULL,
     role TEXT CHECK(role IN ('STUDENT', 'RECRUITER', 'ADMIN')) NOT NULL,
     created_at DATETIME DEFAULT CURRENT_TIMESTAMP
   );
 
+  CREATE TABLE IF NOT EXISTS friend_requests (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    sender_id INTEGER NOT NULL,
+    receiver_id INTEGER NOT NULL,
+    status TEXT CHECK(status IN ('PENDING', 'ACCEPTED', 'REJECTED')) DEFAULT 'PENDING',
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE(sender_id, receiver_id),
+    FOREIGN KEY(sender_id) REFERENCES users(id),
+    FOREIGN KEY(receiver_id) REFERENCES users(id)
+  );
+
+  CREATE TABLE IF NOT EXISTS friends (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id1 INTEGER NOT NULL,
+    user_id2 INTEGER NOT NULL,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE(user_id1, user_id2),
+    FOREIGN KEY(user_id1) REFERENCES users(id),
+    FOREIGN KEY(user_id2) REFERENCES users(id)
+  );
+
   CREATE TABLE IF NOT EXISTS student_profiles (
     user_id INTEGER PRIMARY KEY,
     name TEXT,
+    headline TEXT,
     education TEXT,
+    college_name TEXT,
+    degree TEXT,
+    branch TEXT,
+    graduation_year TEXT,
+    cgpa TEXT,
     bio TEXT,
     location TEXT,
     linkedin_url TEXT,
     github_url TEXT,
     portfolio_url TEXT,
     experience_years INTEGER,
+    phone TEXT,
+    profile_picture_url TEXT,
     views INTEGER DEFAULT 0,
     FOREIGN KEY(user_id) REFERENCES users(id)
   );
@@ -81,11 +139,13 @@ db.exec(`
   CREATE TABLE IF NOT EXISTS recruiter_profiles (
     user_id INTEGER PRIMARY KEY,
     company_name TEXT,
+    headline TEXT,
     company_bio TEXT,
     company_website TEXT,
     industry TEXT,
     company_size TEXT,
     location TEXT,
+    profile_picture_url TEXT,
     is_verified INTEGER DEFAULT 0,
     views INTEGER DEFAULT 0,
     FOREIGN KEY(user_id) REFERENCES users(id)
@@ -115,11 +175,32 @@ db.exec(`
     FOREIGN KEY(student_id) REFERENCES users(id)
   );
 
+  CREATE TABLE IF NOT EXISTS resume_analyses (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id INTEGER NOT NULL,
+    resume_name TEXT,
+    score INTEGER,
+    analysis_json TEXT,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY(user_id) REFERENCES users(id)
+  );
+
   CREATE TABLE IF NOT EXISTS user_skills (
     user_id INTEGER,
     skill TEXT,
     PRIMARY KEY(user_id, skill),
     FOREIGN KEY(user_id) REFERENCES users(id)
+  );
+
+  CREATE TABLE IF NOT EXISTS direct_messages (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    sender_id INTEGER NOT NULL,
+    receiver_id INTEGER NOT NULL,
+    content TEXT NOT NULL,
+    is_read INTEGER DEFAULT 0,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY(sender_id) REFERENCES users(id),
+    FOREIGN KEY(receiver_id) REFERENCES users(id)
   );
 
   CREATE TABLE IF NOT EXISTS messages (
@@ -153,6 +234,13 @@ db.exec(`
     mimetype TEXT,
     data BLOB,
     created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+  );
+
+  CREATE TABLE IF NOT EXISTS saved_jobs (
+    user_id TEXT,
+    job_id TEXT,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY(user_id, job_id)
   );
 
   CREATE TABLE IF NOT EXISTS notifications (
@@ -306,18 +394,52 @@ async function createNotification(userId: string | number, type: string, title: 
   addColumn('jobs', 'location', 'TEXT');
   addColumn('jobs', 'work_type', 'TEXT DEFAULT "ON_SITE"'); // ON_SITE, REMOTE, HYBRID
   addColumn('student_profiles', 'location', 'TEXT');
+  addColumn('student_profiles', 'headline', 'TEXT');
+  addColumn('student_profiles', 'college_name', 'TEXT');
+  addColumn('student_profiles', 'degree', 'TEXT');
+  addColumn('student_profiles', 'branch', 'TEXT');
+  addColumn('student_profiles', 'graduation_year', 'TEXT');
+  addColumn('student_profiles', 'cgpa', 'TEXT');
   addColumn('student_profiles', 'linkedin_url', 'TEXT');
   addColumn('student_profiles', 'github_url', 'TEXT');
   addColumn('student_profiles', 'portfolio_url', 'TEXT');
   addColumn('student_profiles', 'experience_years', 'INTEGER');
+  addColumn('student_profiles', 'phone', 'TEXT');
+  addColumn('recruiter_profiles', 'headline', 'TEXT');
+  addColumn('recruiter_profiles', 'phone', 'TEXT');
+  addColumn('student_profiles', 'profile_picture_url', 'TEXT');
   addColumn('student_profiles', 'views', 'INTEGER DEFAULT 0');
 
   addColumn('recruiter_profiles', 'company_website', 'TEXT');
   addColumn('recruiter_profiles', 'industry', 'TEXT');
   addColumn('recruiter_profiles', 'company_size', 'TEXT');
   addColumn('recruiter_profiles', 'location', 'TEXT');
+  addColumn('recruiter_profiles', 'phone', 'TEXT');
+  addColumn('recruiter_profiles', 'profile_picture_url', 'TEXT');
   addColumn('recruiter_profiles', 'views', 'INTEGER DEFAULT 0');
   addColumn('notifications', 'is_read', 'INTEGER DEFAULT 0');
+  
+  // Migrate saved_jobs job_id to TEXT if needed
+  try {
+    const tableInfo = db.prepare("PRAGMA table_info(saved_jobs)").all();
+    const jobIdCol = tableInfo.find((c: any) => c.name === 'job_id');
+    if (jobIdCol && jobIdCol.type === 'INTEGER') {
+      console.log('[Migration] Converting saved_jobs.job_id to TEXT');
+      db.exec(`
+        CREATE TABLE saved_jobs_new (
+          user_id TEXT,
+          job_id TEXT,
+          created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+          PRIMARY KEY(user_id, job_id)
+        );
+        INSERT INTO saved_jobs_new SELECT user_id, CAST(job_id AS TEXT), created_at FROM saved_jobs;
+        DROP TABLE saved_jobs;
+        ALTER TABLE saved_jobs_new RENAME TO saved_jobs;
+      `);
+    }
+  } catch (e) {
+    console.error('[Migration] Failed to migrate saved_jobs:', e);
+  }
 
   const authenticate = (req: any, res: any, next: any) => {
     const token = req.cookies.token;
@@ -340,14 +462,16 @@ async function createNotification(userId: string | number, type: string, title: 
 
   // Auth Endpoints
   app.post('/api/auth/register', async (req, res) => {
-    const { email, password, role, name, company_name } = req.body;
+    const { email, password, role, name, company_name, username } = req.body;
     const { db: firestore } = getFirebase();
     
+    const finalUsername = username || email.split('@')[0] + Math.floor(Math.random() * 1000);
+
     if (!firestore) {
       // Fallback to SQLite if Firebase is not configured
       try {
         const hashedPassword = await bcrypt.hash(password, 10);
-        const result = db.prepare('INSERT INTO users (email, password, role) VALUES (?, ?, ?)').run(email, hashedPassword, role);
+        const result = db.prepare('INSERT INTO users (email, username, password, role) VALUES (?, ?, ?, ?)').run(email, finalUsername, hashedPassword, role);
         const userId = result.lastInsertRowid;
 
         if (role === 'STUDENT') {
@@ -379,6 +503,7 @@ async function createNotification(userId: string | number, type: string, title: 
 
       const userRef = await firestore.collection('users').add({
         email,
+        username: finalUsername,
         password: hashedPassword,
         role,
         created_at: new Date().toISOString()
@@ -422,10 +547,8 @@ async function createNotification(userId: string | number, type: string, title: 
       }
       const token = jwt.sign({ id: user.id, email: user.email, role: user.role }, JWT_SECRET, { expiresIn: '30d' });
       
-      await createNotification(user.id, 'MESSAGE', 'Welcome back!', `You logged in successfully.`, '/dashboard');
-      
       res.cookie('token', token, { httpOnly: true, secure: true, sameSite: 'none', maxAge: THIRTY_DAYS });
-      res.json({ user: { id: user.id, email: user.email, role: user.role } });
+      res.json({ user: { id: user.id, email: user.email, role: user.role, username: user.username } });
       return;
     }
 
@@ -444,12 +567,487 @@ async function createNotification(userId: string | number, type: string, title: 
 
       const token = jwt.sign({ id: userDoc.id, email: userData.email, role: userData.role }, JWT_SECRET, { expiresIn: '30d' });
       
-      await createNotification(userDoc.id, 'MESSAGE', 'Welcome back!', `You logged in successfully.`, '/dashboard');
-      
       res.cookie('token', token, { httpOnly: true, secure: true, sameSite: 'none', maxAge: THIRTY_DAYS });
-      res.json({ user: { id: userDoc.id, email: userData.email, role: userData.role } });
+      res.json({ user: { id: userDoc.id, email: userData.email, role: userData.role, username: userData.username } });
     } catch (err: any) {
       res.status(400).json({ error: err.message });
+    }
+  });
+
+  // Social Endpoints
+  app.get('/api/social/users/search', authenticate, async (req: any, res) => {
+    const { q } = req.query;
+    if (!q) return res.json([]);
+    const currentUserId = req.user.id;
+
+    const { db: firestore } = getFirebase();
+    if (!firestore) {
+      const users = db.prepare(`
+        SELECT u.id, u.email, u.username, u.role,
+               COALESCE(sp.name, rp.company_name) as name,
+               COALESCE(sp.profile_picture_url, rp.profile_picture_url) as profile_picture_url,
+               EXISTS(SELECT 1 FROM friends WHERE (user_id1 = ? AND user_id2 = u.id) OR (user_id1 = u.id AND user_id2 = ?)) as is_friend,
+               EXISTS(SELECT 1 FROM friend_requests WHERE sender_id = ? AND receiver_id = u.id AND status = 'PENDING') as has_sent_request
+        FROM users u
+        LEFT JOIN student_profiles sp ON u.id = sp.user_id
+        LEFT JOIN recruiter_profiles rp ON u.id = rp.user_id
+        WHERE (u.username LIKE ? OR u.email LIKE ? OR sp.name LIKE ? OR rp.company_name LIKE ?)
+        AND u.id != ?
+        LIMIT 20
+      `).all(currentUserId, currentUserId, currentUserId, `%${q}%`, `%${q}%`, `%${q}%`, `%${q}%`, currentUserId);
+      return res.json(users);
+    }
+
+    try {
+      // Firestore search is limited, we'll do a simple prefix search or fetch all and filter
+      // For a real app, use Algolia or similar. Here we'll just fetch some and filter.
+      const usersSnap = await firestore.collection('users').limit(100).get();
+      const users = await Promise.all(usersSnap.docs.map(async doc => {
+        const data = doc.data();
+        let name = '';
+        let profile_picture_url = '';
+        
+        if (data.role === 'STUDENT') {
+          const p = await firestore.collection('student_profiles').doc(doc.id).get();
+          name = p.data()?.name || '';
+          profile_picture_url = p.data()?.profile_picture_url || '';
+        } else {
+          const p = await firestore.collection('recruiter_profiles').doc(doc.id).get();
+          name = p.data()?.company_name || '';
+          profile_picture_url = p.data()?.profile_picture_url || '';
+        }
+
+        const isFriend1 = await firestore.collection('friends')
+          .where('user_id1', '==', currentUserId.toString())
+          .where('user_id2', '==', doc.id)
+          .get();
+        const isFriend2 = await firestore.collection('friends')
+          .where('user_id1', '==', doc.id)
+          .where('user_id2', '==', currentUserId.toString())
+          .get();
+        
+        const hasSentRequest = await firestore.collection('friend_requests')
+          .where('sender_id', '==', currentUserId.toString())
+          .where('receiver_id', '==', doc.id)
+          .where('status', '==', 'PENDING')
+          .get();
+
+        return {
+          id: doc.id,
+          email: data.email,
+          username: data.username,
+          role: data.role,
+          name,
+          profile_picture_url,
+          is_friend: !isFriend1.empty || !isFriend2.empty,
+          has_sent_request: !hasSentRequest.empty
+        };
+      }));
+
+      const filtered = users.filter(u => 
+        u.username?.toLowerCase().includes(q.toString().toLowerCase()) ||
+        u.email?.toLowerCase().includes(q.toString().toLowerCase()) ||
+        u.name?.toLowerCase().includes(q.toString().toLowerCase())
+      );
+
+      res.json(filtered);
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  app.get('/api/social/users/:id', authenticate, async (req: any, res) => {
+    const { id } = req.params;
+    const currentUserId = req.user.id;
+    const { db: firestore } = getFirebase();
+
+    if (!firestore) {
+      const user: any = db.prepare('SELECT id, email, username, role FROM users WHERE id = ?').get(id);
+      if (!user) return res.status(404).json({ error: 'User not found' });
+
+      let profile: any;
+      if (user.role === 'STUDENT') {
+        profile = db.prepare('SELECT * FROM student_profiles WHERE user_id = ?').get(id);
+      } else {
+        profile = db.prepare('SELECT * FROM recruiter_profiles WHERE user_id = ?').get(id);
+      }
+
+      const isFriend = db.prepare(`
+        SELECT 1 FROM friends 
+        WHERE (user_id1 = ? AND user_id2 = ?) 
+           OR (user_id1 = ? AND user_id2 = ?)
+      `).get(currentUserId, id, id, currentUserId);
+
+      const hasSentRequest = db.prepare(`
+        SELECT 1 FROM friend_requests 
+        WHERE sender_id = ? AND receiver_id = ? AND status = 'PENDING'
+      `).get(currentUserId, id);
+
+      return res.json({ 
+        ...user, 
+        profile, 
+        is_friend: !!isFriend, 
+        has_sent_request: !!hasSentRequest 
+      });
+    }
+
+    try {
+      const userDoc = await firestore.collection('users').doc(id).get();
+      if (!userDoc.exists) return res.status(404).json({ error: 'User not found' });
+
+      const userData = userDoc.data();
+      let profile: any;
+      if (userData?.role === 'STUDENT') {
+        const p = await firestore.collection('student_profiles').doc(id).get();
+        profile = p.data();
+      } else {
+        const p = await firestore.collection('recruiter_profiles').doc(id).get();
+        profile = p.data();
+      }
+
+      const isFriend1 = await firestore.collection('friends')
+        .where('user_id1', '==', currentUserId.toString())
+        .where('user_id2', '==', id)
+        .get();
+      const isFriend2 = await firestore.collection('friends')
+        .where('user_id1', '==', id)
+        .where('user_id2', '==', currentUserId.toString())
+        .get();
+      
+      const hasSentRequest = await firestore.collection('friend_requests')
+        .where('sender_id', '==', currentUserId.toString())
+        .where('receiver_id', '==', id)
+        .where('status', '==', 'PENDING')
+        .get();
+
+      res.json({ 
+        id, 
+        ...userData, 
+        profile, 
+        is_friend: !isFriend1.empty || !isFriend2.empty,
+        has_sent_request: !hasSentRequest.empty
+      });
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  app.post('/api/social/friend-request', authenticate, async (req: any, res) => {
+    const { receiverId } = req.body;
+    const senderId = req.user.id;
+
+    if (!receiverId) {
+      return res.status(400).json({ error: 'Receiver ID is required' });
+    }
+
+    if (senderId.toString() === receiverId.toString()) {
+      return res.status(400).json({ error: 'Cannot send friend request to yourself' });
+    }
+
+    const { db: firestore } = getFirebase();
+    if (!firestore) {
+      try {
+        // Check if request already exists
+        const existing = db.prepare('SELECT * FROM friend_requests WHERE sender_id = ? AND receiver_id = ?').get(senderId, receiverId);
+        if (existing) {
+          return res.status(400).json({ error: 'Friend request already sent' });
+        }
+
+        db.prepare('INSERT INTO friend_requests (sender_id, receiver_id) VALUES (?, ?)').run(senderId, receiverId);
+        
+        const sender: any = db.prepare('SELECT username FROM users WHERE id = ?').get(senderId);
+        await createNotification(receiverId, 'MESSAGE', 'New Friend Request', `${sender.username} sent you a friend request.`, '/network');
+        
+        res.json({ success: true });
+      } catch (err: any) {
+        console.error('Friend request error:', err);
+        res.status(400).json({ error: 'Failed to send friend request' });
+      }
+      return;
+    }
+
+    try {
+      const requestId = `${senderId}_${receiverId}`;
+      await firestore.collection('friend_requests').doc(requestId).set({
+        sender_id: senderId.toString(),
+        receiver_id: receiverId.toString(),
+        status: 'PENDING',
+        created_at: new Date().toISOString()
+      });
+
+      const senderDoc = await firestore.collection('users').doc(senderId.toString()).get();
+      const senderData = senderDoc.data();
+      await createNotification(receiverId.toString(), 'MESSAGE', 'New Friend Request', `${senderData?.username} sent you a friend request.`, '/network');
+
+      res.json({ success: true });
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  app.post('/api/social/friend-request/:id/respond', authenticate, async (req: any, res) => {
+    const { id } = req.params;
+    const { action } = req.body; // 'ACCEPT' or 'REJECT'
+    const userId = req.user.id;
+
+    const { db: firestore } = getFirebase();
+    if (!firestore) {
+      const request: any = db.prepare('SELECT * FROM friend_requests WHERE id = ? AND receiver_id = ?').get(id, userId);
+      if (!request) return res.status(404).json({ error: 'Request not found' });
+
+      if (action === 'ACCEPT') {
+        db.prepare('UPDATE friend_requests SET status = ? WHERE id = ?').run('ACCEPTED', id);
+        db.prepare('INSERT INTO friends (user_id1, user_id2) VALUES (?, ?)').run(
+          Math.min(request.sender_id, request.receiver_id),
+          Math.max(request.sender_id, request.receiver_id)
+        );
+        
+        const receiver: any = db.prepare('SELECT username FROM users WHERE id = ?').get(userId);
+        await createNotification(request.sender_id, 'MESSAGE', 'Friend Request Accepted', `${receiver.username} accepted your friend request.`, '/network');
+      } else {
+        db.prepare('UPDATE friend_requests SET status = ? WHERE id = ?').run('REJECTED', id);
+      }
+      return res.json({ success: true });
+    }
+
+    try {
+      const requestDoc = await firestore.collection('friend_requests').doc(id).get();
+      if (!requestDoc.exists) return res.status(404).json({ error: 'Request not found' });
+
+      const requestData = requestDoc.data();
+      if (requestData?.receiver_id !== userId.toString()) {
+        return res.status(403).json({ error: 'Unauthorized' });
+      }
+
+      if (action === 'ACCEPT') {
+        await firestore.collection('friend_requests').doc(id).update({ status: 'ACCEPTED' });
+        const friendshipId = [requestData.sender_id, requestData.receiver_id].sort().join('_');
+        await firestore.collection('friends').doc(friendshipId).set({
+          user_id1: requestData.sender_id,
+          user_id2: requestData.receiver_id,
+          created_at: new Date().toISOString()
+        });
+
+        const receiverDoc = await firestore.collection('users').doc(userId.toString()).get();
+        const receiverData = receiverDoc.data();
+        await createNotification(requestData.sender_id, 'MESSAGE', 'Friend Request Accepted', `${receiverData?.username} accepted your friend request.`, '/network');
+      } else {
+        await firestore.collection('friend_requests').doc(id).update({ status: 'REJECTED' });
+      }
+      res.json({ success: true });
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  app.get('/api/social/friends', authenticate, async (req: any, res) => {
+    const userId = req.user.id;
+    const { db: firestore } = getFirebase();
+
+    if (!firestore) {
+      const friends = db.prepare(`
+        SELECT f.*, u.id as friend_id, u.username as friend_username, u.role as friend_role,
+               COALESCE(sp.name, rp.company_name) as friend_name,
+               COALESCE(sp.profile_picture_url, rp.profile_picture_url) as friend_avatar
+        FROM friends f
+        JOIN users u ON (f.user_id1 = u.id OR f.user_id2 = u.id) AND u.id != ?
+        LEFT JOIN student_profiles sp ON u.id = sp.user_id
+        LEFT JOIN recruiter_profiles rp ON u.id = rp.user_id
+        WHERE f.user_id1 = ? OR f.user_id2 = ?
+      `).all(userId, userId, userId);
+      return res.json(friends);
+    }
+
+    try {
+      const friendsSnap1 = await firestore.collection('friends').where('user_id1', '==', userId.toString()).get();
+      const friendsSnap2 = await firestore.collection('friends').where('user_id2', '==', userId.toString()).get();
+      
+      const friendDocs = [...friendsSnap1.docs, ...friendsSnap2.docs];
+      const friends = await Promise.all(friendDocs.map(async doc => {
+        const data = doc.data();
+        const friendId = data.user_id1 === userId.toString() ? data.user_id2 : data.user_id1;
+        
+        const u = await firestore.collection('users').doc(friendId).get();
+        const uData = u.data();
+        
+        let name = '';
+        let avatar = '';
+        if (uData?.role === 'STUDENT') {
+          const p = await firestore.collection('student_profiles').doc(friendId).get();
+          name = p.data()?.name || '';
+          avatar = p.data()?.profile_picture_url || '';
+        } else {
+          const p = await firestore.collection('recruiter_profiles').doc(friendId).get();
+          name = p.data()?.company_name || '';
+          avatar = p.data()?.profile_picture_url || '';
+        }
+
+        return {
+          id: doc.id,
+          friend_id: friendId,
+          friend_username: uData?.username,
+          friend_role: uData?.role,
+          friend_name: name,
+          friend_avatar: avatar,
+          created_at: data.created_at
+        };
+      }));
+
+      res.json(friends);
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  app.get('/api/social/friend-requests', authenticate, async (req: any, res) => {
+    const userId = req.user.id;
+    const { db: firestore } = getFirebase();
+
+    if (!firestore) {
+      const requests = db.prepare(`
+        SELECT fr.*, u.username as sender_username,
+               COALESCE(sp.name, rp.company_name) as sender_name,
+               COALESCE(sp.profile_picture_url, rp.profile_picture_url) as sender_avatar
+        FROM friend_requests fr
+        JOIN users u ON fr.sender_id = u.id
+        LEFT JOIN student_profiles sp ON u.id = sp.user_id
+        LEFT JOIN recruiter_profiles rp ON u.id = rp.user_id
+        WHERE fr.receiver_id = ? AND fr.status = 'PENDING'
+      `).all(userId);
+      return res.json(requests);
+    }
+
+    try {
+      const requestsSnap = await firestore.collection('friend_requests')
+        .where('receiver_id', '==', userId.toString())
+        .where('status', '==', 'PENDING')
+        .get();
+      
+      const requests = await Promise.all(requestsSnap.docs.map(async doc => {
+        const data = doc.data();
+        const u = await firestore.collection('users').doc(data.sender_id).get();
+        const uData = u.data();
+        
+        let name = '';
+        let avatar = '';
+        if (uData?.role === 'STUDENT') {
+          const p = await firestore.collection('student_profiles').doc(data.sender_id).get();
+          name = p.data()?.name || '';
+          avatar = p.data()?.profile_picture_url || '';
+        } else {
+          const p = await firestore.collection('recruiter_profiles').doc(data.sender_id).get();
+          name = p.data()?.company_name || '';
+          avatar = p.data()?.profile_picture_url || '';
+        }
+
+        return {
+          id: doc.id,
+          ...data,
+          sender_username: uData?.username,
+          sender_name: name,
+          sender_avatar: avatar
+        };
+      }));
+
+      res.json(requests);
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  // Chat Endpoints
+  app.get('/api/chat/messages/:friendId', authenticate, async (req: any, res) => {
+    const userId = req.user.id;
+    const friendId = req.params.friendId;
+
+    const { db: firestore } = getFirebase();
+    if (!firestore) {
+      const messages = db.prepare(`
+        SELECT * FROM direct_messages 
+        WHERE (sender_id = ? AND receiver_id = ?) 
+           OR (sender_id = ? AND receiver_id = ?)
+        ORDER BY created_at ASC
+      `).all(userId, parseInt(friendId), parseInt(friendId), userId);
+      return res.json(messages);
+    }
+
+    try {
+      const messages1 = await firestore.collection('direct_messages')
+        .where('sender_id', '==', userId.toString())
+        .where('receiver_id', '==', friendId.toString())
+        .get();
+      const messages2 = await firestore.collection('direct_messages')
+        .where('sender_id', '==', friendId.toString())
+        .where('receiver_id', '==', userId.toString())
+        .get();
+      
+      const allMessages = [...messages1.docs, ...messages2.docs]
+        .map(doc => ({ id: doc.id, ...doc.data() }))
+        .sort((a: any, b: any) => new Date(a.created_at).getTime() - new Date(b.created_at).getTime());
+      
+      res.json(allMessages);
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  app.post('/api/chat/messages', authenticate, async (req: any, res) => {
+    const senderId = req.user.id;
+    const { receiverId, content } = req.body;
+
+    if (!content) return res.status(400).json({ error: 'Content is required' });
+
+    const { db: firestore } = getFirebase();
+    if (!firestore) {
+      const rId = parseInt(receiverId);
+      // Check if they are friends
+      const isFriend = db.prepare(`
+        SELECT 1 FROM friends 
+        WHERE (user_id1 = ? AND user_id2 = ?) 
+           OR (user_id1 = ? AND user_id2 = ?)
+      `).get(senderId, rId, rId, senderId);
+
+      if (!isFriend) {
+        return res.status(403).json({ error: 'You can only message friends' });
+      }
+
+      const result = db.prepare('INSERT INTO direct_messages (sender_id, receiver_id, content) VALUES (?, ?, ?)').run(senderId, rId, content);
+      const newMessage = db.prepare('SELECT * FROM direct_messages WHERE id = ?').get(result.lastInsertRowid);
+      
+      await createNotification(rId, 'MESSAGE', 'New Message', `You have a new message from ${req.user.username}`, '/network');
+      
+      return res.json(newMessage);
+    }
+
+    try {
+      // Check if they are friends in Firestore
+      const isFriend1 = await firestore.collection('friends')
+        .where('user_id1', '==', senderId.toString())
+        .where('user_id2', '==', receiverId.toString())
+        .get();
+      const isFriend2 = await firestore.collection('friends')
+        .where('user_id1', '==', receiverId.toString())
+        .where('user_id2', '==', senderId.toString())
+        .get();
+
+      if (isFriend1.empty && isFriend2.empty) {
+        return res.status(403).json({ error: 'You can only message friends' });
+      }
+
+      const messageData = {
+        sender_id: senderId.toString(),
+        receiver_id: receiverId.toString(),
+        content,
+        is_read: 0,
+        created_at: new Date().toISOString()
+      };
+
+      const docRef = await firestore.collection('direct_messages').add(messageData);
+      await createNotification(receiverId, 'MESSAGE', 'New Message', `You have a new message from ${req.user.username}`, '/network');
+      
+      res.json({ id: docRef.id, ...messageData });
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
     }
   });
 
@@ -461,30 +1059,45 @@ async function createNotification(userId: string | number, type: string, title: 
   app.get('/api/auth/me', authenticate, async (req: any, res) => {
     const { db: firestore } = getFirebase();
     let name = req.user.email.split('@')[0];
+    let profile_picture_url = null;
 
     try {
       if (!firestore) {
         if (req.user.role === 'STUDENT') {
-          const profile = db.prepare('SELECT name FROM student_profiles WHERE user_id = ?').get(req.user.id);
-          if (profile) name = profile.name;
+          const profile = db.prepare('SELECT name, profile_picture_url FROM student_profiles WHERE user_id = ?').get(req.user.id);
+          if (profile) {
+            name = profile.name;
+            profile_picture_url = profile.profile_picture_url;
+          }
         } else if (req.user.role === 'RECRUITER') {
-          const profile = db.prepare('SELECT company_name FROM recruiter_profiles WHERE user_id = ?').get(req.user.id);
-          if (profile) name = profile.company_name;
+          const profile = db.prepare('SELECT company_name, profile_picture_url FROM recruiter_profiles WHERE user_id = ?').get(req.user.id);
+          if (profile) {
+            name = profile.company_name;
+            profile_picture_url = profile.profile_picture_url;
+          }
         }
       } else {
         if (req.user.role === 'STUDENT') {
           const profileDoc = await firestore.collection('student_profiles').doc(req.user.id).get();
-          if (profileDoc.exists) name = profileDoc.data()?.name;
+          if (profileDoc.exists) {
+            const data = profileDoc.data();
+            name = data?.name;
+            profile_picture_url = data?.profile_picture_url;
+          }
         } else if (req.user.role === 'RECRUITER') {
           const profileDoc = await firestore.collection('recruiter_profiles').doc(req.user.id).get();
-          if (profileDoc.exists) name = profileDoc.data()?.company_name;
+          if (profileDoc.exists) {
+            const data = profileDoc.data();
+            name = data?.company_name;
+            profile_picture_url = data?.profile_picture_url;
+          }
         }
       }
     } catch (err) {
       console.error('Error fetching name for /me:', err);
     }
 
-    res.json({ user: { ...req.user, name } });
+    res.json({ user: { ...req.user, name, profile_picture_url } });
   });
 
   // File Upload Endpoint
@@ -496,10 +1109,11 @@ async function createNotification(userId: string | number, type: string, title: 
     }
     console.log('[Upload] File saved:', req.file.filename, 'to', req.file.path);
     
-    if (req.file.mimetype !== 'application/pdf') {
+    const allowedMimeTypes = ['application/pdf', 'image/jpeg', 'image/png', 'image/gif', 'image/webp'];
+    if (!allowedMimeTypes.includes(req.file.mimetype)) {
       console.error('[Upload] Invalid mimetype:', req.file.mimetype);
       if (fs.existsSync(req.file.path)) fs.unlinkSync(req.file.path);
-      return res.status(400).json({ error: 'Only PDF files are allowed' });
+      return res.status(400).json({ error: 'Only PDF and image files are allowed' });
     }
 
     if (!fs.existsSync(req.file.path)) {
@@ -545,18 +1159,69 @@ async function createNotification(userId: string | number, type: string, title: 
   });
 
   // Profile Endpoints
+  app.get('/api/students/:id', authenticate, async (req: any, res) => {
+    if (req.user.role !== 'RECRUITER' && req.user.role !== 'ADMIN' && req.user.id !== req.params.id) {
+      return res.status(403).json({ error: 'Unauthorized' });
+    }
+
+    const { db: firestore } = getFirebase();
+    if (!firestore) {
+      const profile = db.prepare(`
+        SELECT sp.*, u.email 
+        FROM student_profiles sp 
+        JOIN users u ON sp.user_id = u.id 
+        WHERE sp.user_id = ?
+      `).get(req.params.id);
+      if (profile) {
+        const skills = db.prepare('SELECT skill FROM user_skills WHERE user_id = ?').all(req.params.id);
+        profile.skills = skills.map((s: any) => s.skill);
+        
+        // Increment views
+        db.prepare('UPDATE student_profiles SET views = views + 1 WHERE user_id = ?').run(req.params.id);
+      }
+      return res.json(profile);
+    }
+
+    try {
+      const doc = await firestore.collection('student_profiles').doc(req.params.id).get();
+      if (doc.exists) {
+        const userDoc = await firestore.collection('users').doc(req.params.id).get();
+        const profileData = { ...doc.data(), email: userDoc.data()?.email };
+        
+        // Increment views in firestore
+        await firestore.collection('student_profiles').doc(req.params.id).update({
+          views: (doc.data()?.views || 0) + 1
+        });
+        return res.json(profileData);
+      }
+      res.status(404).json({ error: 'Profile not found' });
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
   app.get('/api/profile', authenticate, async (req: any, res) => {
     const { db: firestore } = getFirebase();
     if (!firestore) {
       let profile;
       if (req.user.role === 'STUDENT') {
-        profile = db.prepare('SELECT * FROM student_profiles WHERE user_id = ?').get(req.user.id);
+        profile = db.prepare(`
+          SELECT sp.*, u.email 
+          FROM student_profiles sp 
+          JOIN users u ON sp.user_id = u.id 
+          WHERE sp.user_id = ?
+        `).get(req.user.id);
         if (profile) {
           const skills = db.prepare('SELECT skill FROM user_skills WHERE user_id = ?').all(req.user.id);
           profile.skills = skills.map((s: any) => s.skill);
         }
       } else if (req.user.role === 'RECRUITER') {
-        profile = db.prepare('SELECT * FROM recruiter_profiles WHERE user_id = ?').get(req.user.id);
+        profile = db.prepare(`
+          SELECT rp.*, u.email 
+          FROM recruiter_profiles rp 
+          JOIN users u ON rp.user_id = u.id 
+          WHERE rp.user_id = ?
+        `).get(req.user.id);
       }
       return res.json(profile);
     }
@@ -565,10 +1230,12 @@ async function createNotification(userId: string | number, type: string, title: 
       let profile;
       if (req.user.role === 'STUDENT') {
         const doc = await firestore.collection('student_profiles').doc(req.user.id).get();
-        profile = doc.exists ? doc.data() : null;
+        const userDoc = await firestore.collection('users').doc(req.user.id).get();
+        profile = doc.exists ? { ...doc.data(), email: userDoc.data()?.email } : null;
       } else if (req.user.role === 'RECRUITER') {
         const doc = await firestore.collection('recruiter_profiles').doc(req.user.id).get();
-        profile = doc.exists ? doc.data() : null;
+        const userDoc = await firestore.collection('users').doc(req.user.id).get();
+        profile = doc.exists ? { ...doc.data(), email: userDoc.data()?.email } : null;
       }
       res.json(profile);
     } catch (err: any) {
@@ -578,7 +1245,7 @@ async function createNotification(userId: string | number, type: string, title: 
 
   app.put('/api/profile', authenticate, async (req: any, res) => {
     const { 
-      name, education, bio, location, linkedin_url, github_url, portfolio_url, experience_years,
+      name, headline, education, college_name, degree, branch, graduation_year, cgpa, bio, location, linkedin_url, github_url, portfolio_url, experience_years, phone, profile_picture_url,
       company_name, company_bio, company_website, industry, company_size, 
       skills 
     } = req.body;
@@ -589,17 +1256,25 @@ async function createNotification(userId: string | number, type: string, title: 
         if (req.user.role === 'STUDENT') {
           const result = db.prepare(`
             UPDATE student_profiles 
-            SET name = ?, education = ?, bio = ?, location = ?, linkedin_url = ?, github_url = ?, portfolio_url = ?, experience_years = ? 
+            SET name = ?, headline = ?, education = ?, college_name = ?, degree = ?, branch = ?, graduation_year = ?, cgpa = ?, bio = ?, location = ?, linkedin_url = ?, github_url = ?, portfolio_url = ?, experience_years = ?, phone = ?, profile_picture_url = ? 
             WHERE user_id = ?
           `).run(
             name || null, 
+            headline || null,
             education || null, 
+            college_name || null,
+            degree || null,
+            branch || null,
+            graduation_year || null,
+            cgpa || null,
             bio || null, 
             location || null, 
             linkedin_url || null, 
             github_url || null, 
             portfolio_url || null, 
             experience_years !== undefined && !isNaN(Number(experience_years)) ? Number(experience_years) : null, 
+            phone || null,
+            profile_picture_url || null,
             req.user.id
           );
           
@@ -609,17 +1284,25 @@ async function createNotification(userId: string | number, type: string, title: 
             // Retry update
             db.prepare(`
               UPDATE student_profiles 
-              SET name = ?, education = ?, bio = ?, location = ?, linkedin_url = ?, github_url = ?, portfolio_url = ?, experience_years = ? 
+              SET name = ?, headline = ?, education = ?, college_name = ?, degree = ?, branch = ?, graduation_year = ?, cgpa = ?, bio = ?, location = ?, linkedin_url = ?, github_url = ?, portfolio_url = ?, experience_years = ?, phone = ?, profile_picture_url = ? 
               WHERE user_id = ?
             `).run(
               name || null, 
+              headline || null,
               education || null, 
+              college_name || null,
+              degree || null,
+              branch || null,
+              graduation_year || null,
+              cgpa || null,
               bio || null, 
               location || null, 
               linkedin_url || null, 
               github_url || null, 
               portfolio_url || null, 
               experience_years !== undefined && !isNaN(Number(experience_years)) ? Number(experience_years) : null, 
+              phone || null,
+              profile_picture_url || null,
               req.user.id
             );
           }
@@ -636,15 +1319,18 @@ async function createNotification(userId: string | number, type: string, title: 
         } else if (req.user.role === 'RECRUITER') {
           const result = db.prepare(`
             UPDATE recruiter_profiles 
-            SET company_name = ?, company_bio = ?, company_website = ?, industry = ?, company_size = ?, location = ? 
+            SET company_name = ?, headline = ?, company_bio = ?, company_website = ?, industry = ?, company_size = ?, location = ?, phone = ?, profile_picture_url = ? 
             WHERE user_id = ?
           `).run(
             company_name || null, 
+            headline || null,
             company_bio || null, 
             company_website || null, 
             industry || null, 
             company_size || null, 
             location || null, 
+            phone || null,
+            profile_picture_url || null,
             req.user.id
           );
 
@@ -652,15 +1338,18 @@ async function createNotification(userId: string | number, type: string, title: 
             db.prepare('INSERT OR IGNORE INTO recruiter_profiles (user_id, company_name) VALUES (?, ?)').run(req.user.id, company_name || '');
             db.prepare(`
               UPDATE recruiter_profiles 
-              SET company_name = ?, company_bio = ?, company_website = ?, industry = ?, company_size = ?, location = ? 
+              SET company_name = ?, headline = ?, company_bio = ?, company_website = ?, industry = ?, company_size = ?, location = ?, phone = ?, profile_picture_url = ? 
               WHERE user_id = ?
             `).run(
               company_name || null, 
+              headline || null,
               company_bio || null, 
               company_website || null, 
               industry || null, 
               company_size || null, 
               location || null, 
+              phone || null,
+              profile_picture_url || null,
               req.user.id
             );
           }
@@ -672,12 +1361,20 @@ async function createNotification(userId: string | number, type: string, title: 
         await firestore.collection('student_profiles').doc(req.user.id).set({
           user_id: req.user.id,
           name: name || '',
+          headline: headline || '',
           education: education || '',
+          college_name: college_name || '',
+          degree: degree || '',
+          branch: branch || '',
+          graduation_year: graduation_year || '',
+          cgpa: cgpa || '',
           bio: bio || '',
           location: location || '',
           linkedin_url: linkedin_url || '',
           github_url: github_url || '',
           portfolio_url: portfolio_url || '',
+          phone: phone || '',
+          profile_picture_url: profile_picture_url || '',
           experience_years: experience_years !== undefined && !isNaN(Number(experience_years)) ? Number(experience_years) : 0,
           skills: Array.isArray(skills) ? skills : (typeof skills === 'string' ? skills.split(',').map(s => s.trim()) : [])
         }, { merge: true });
@@ -685,16 +1382,163 @@ async function createNotification(userId: string | number, type: string, title: 
         await firestore.collection('recruiter_profiles').doc(req.user.id).set({
           user_id: req.user.id,
           company_name: company_name || '',
+          headline: headline || '',
           company_bio: company_bio || '',
           company_website: company_website || '',
           industry: industry || '',
           company_size: company_size || '',
-          location: location || ''
+          location: location || '',
+          phone: phone || '',
+          profile_picture_url: profile_picture_url || ''
         }, { merge: true });
       }
       res.json({ success: true });
     } catch (err: any) {
       console.error('Profile update error:', err);
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  app.post('/api/extract-text', authenticate, upload.single('file'), async (req: any, res) => {
+    if (!req.file) {
+      return res.status(400).json({ error: 'No file uploaded' });
+    }
+
+    const filePath = req.file.path;
+
+    try {
+      const dataBuffer = fs.readFileSync(filePath);
+      
+      // Robust pdf-parse usage
+      let resolvedPdfParse = pdfParse;
+      if (typeof resolvedPdfParse !== 'function' && resolvedPdfParse) {
+        if (typeof (resolvedPdfParse as any).default === 'function') {
+          resolvedPdfParse = (resolvedPdfParse as any).default;
+        } else if (typeof (resolvedPdfParse as any).pdf === 'function') {
+          resolvedPdfParse = (resolvedPdfParse as any).pdf;
+        }
+      }
+
+      if (typeof resolvedPdfParse !== 'function') {
+        console.error('[Error] pdfParse is not a function at runtime. Type:', typeof resolvedPdfParse, 'Value:', resolvedPdfParse);
+        throw new Error(`pdfParse is not a function (type: ${typeof resolvedPdfParse}). This usually means the module was not loaded correctly.`);
+      }
+      
+      let data;
+      try {
+        // Try as a function first
+        data = await resolvedPdfParse(dataBuffer);
+      } catch (err: any) {
+        // If it's a class constructor error, try with 'new'
+        if (err instanceof TypeError && err.message.includes("without 'new'")) {
+          console.log('[Runtime] pdfParse seems to be a class, retrying with new...');
+          try {
+            // Some newer versions might be a class
+            const pdfParser = new resolvedPdfParse();
+            data = await pdfParser.parse(dataBuffer);
+          } catch (newErr: any) {
+            // If that also fails, try just new pdfParse(buffer)
+            try {
+              data = await new resolvedPdfParse(dataBuffer);
+            } catch (finalErr: any) {
+              throw err; // Throw original error if both new attempts fail
+            }
+          }
+        } else {
+          throw err;
+        }
+      }
+      
+      if (!data || !data.text || data.text.trim().length === 0) {
+        throw new Error('No text could be extracted from this PDF. Please ensure it is not a scanned image.');
+      }
+      
+      // Clean up the file after extraction
+      if (fs.existsSync(filePath)) {
+        fs.unlinkSync(filePath);
+      }
+      
+      res.json({ text: data.text });
+    } catch (err: any) {
+      console.error('Error extracting text:', err);
+      
+      // Ensure cleanup on error
+      if (fs.existsSync(filePath)) {
+        try {
+          fs.unlinkSync(filePath);
+        } catch (unlinkErr) {
+          console.error('Failed to delete file after error:', unlinkErr);
+        }
+      }
+      
+      res.status(500).json({ error: err.message || 'Failed to extract text from PDF' });
+    }
+  });
+
+  app.post('/api/analyze-resume', authenticate, async (req: any, res) => {
+    const { text } = req.body;
+    const apiKey = process.env.GEMINI_API_KEY;
+
+    if (!apiKey) {
+      return res.status(500).json({ error: 'Gemini API Key is missing on server.' });
+    }
+
+    try {
+      // Use the class with 'new'
+      const ai = new GoogleGenAIClass({ apiKey });
+      const response = await ai.models.generateContent({
+        model: "gemini-3-flash-preview",
+        contents: `Analyze the following resume text and provide a professional evaluation. 
+        Return the result in JSON format with the following structure:
+        {
+          "score": number (0-100),
+          "summary": "brief professional summary",
+          "strengths": ["list", "of", "strengths"],
+          "weaknesses": ["list", "of", "weaknesses"],
+          "missing_skills": ["skills", "that", "could", "be", "added"],
+          "formatting_tips": ["tips", "to", "improve", "layout"],
+          "keywords_to_add": ["important", "keywords", "for", "ATS"],
+          "overall_verdict": "final recommendation"
+        }
+        
+        Resume Text:
+        ${text}`,
+        config: {
+          responseMimeType: "application/json",
+        }
+      });
+
+      const result = JSON.parse(response.text);
+      res.json(result);
+    } catch (err: any) {
+      console.error('Gemini analysis error:', err);
+      res.status(500).json({ error: err.message || 'Failed to analyze resume' });
+    }
+  });
+
+  app.post('/api/resume-analysis', authenticate, async (req: any, res) => {
+    const { resume_name, score, analysis_json } = req.body;
+    try {
+      db.prepare(`
+        INSERT INTO resume_analyses (user_id, resume_name, score, analysis_json)
+        VALUES (?, ?, ?, ?)
+      `).run(req.user.id, resume_name, score, JSON.stringify(analysis_json));
+      res.json({ success: true });
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  app.get('/api/resume-analyses', authenticate, async (req: any, res) => {
+    try {
+      const analyses = db.prepare(`
+        SELECT * FROM resume_analyses WHERE user_id = ? ORDER BY created_at DESC
+      `).all(req.user.id);
+      res.json(analyses.map((a: any) => ({
+        ...a,
+        analysis_json: JSON.parse(a.analysis_json)
+      })));
+    } catch (err: any) {
       res.status(500).json({ error: err.message });
     }
   });
@@ -711,11 +1555,14 @@ async function createNotification(userId: string | number, type: string, title: 
       } else {
         // Students see approved and pending jobs for now to ensure connectivity
         jobs = db.prepare(`
-          SELECT jobs.*, COALESCE(recruiter_profiles.company_name, 'Unknown Company') as company_name, recruiter_profiles.user_id as recruiter_user_id
+          SELECT jobs.*, 
+                 COALESCE(recruiter_profiles.company_name, 'Unknown Company') as company_name, 
+                 recruiter_profiles.user_id as recruiter_user_id,
+                 (SELECT 1 FROM applications WHERE job_id = jobs.id AND student_id = ?) as is_applied
           FROM jobs 
           LEFT JOIN recruiter_profiles ON jobs.recruiter_id = recruiter_profiles.user_id 
           WHERE jobs.status IN ('APPROVED', 'PENDING')
-        `).all();
+        `).all(req.user.id);
         
         // Increment recruiter profile views when student views jobs
         const recruiterIds = [...new Set(jobs.map((j: any) => j.recruiter_user_id).filter(Boolean))];
@@ -758,11 +1605,21 @@ async function createNotification(userId: string | number, type: string, title: 
         const studentDoc = await firestore.collection('student_profiles').doc(req.user.id).get();
         const userSkills = (studentDoc.data()?.skills || []).map((s: string) => s.toLowerCase().trim());
         
+        // Fetch student's applications to mark applied jobs
+        const applicationsSnap = await firestore.collection('applications')
+          .where('student_id', '==', req.user.id)
+          .get();
+        const appliedJobIds = new Set(applicationsSnap.docs.map(doc => doc.data().job_id));
+
         jobs = jobs.map((job: any) => {
           const requirements = safeParse(job.requirements).map((r: string) => r.toLowerCase().trim());
           const matches = requirements.filter((req: string) => userSkills.includes(req));
           const matchPercentage = requirements.length > 0 ? Math.round((matches.length / requirements.length) * 100) : 0;
-          return { ...job, matchPercentage };
+          return { 
+            ...job, 
+            matchPercentage,
+            is_applied: appliedJobIds.has(job.id)
+          };
         });
       }
       res.json(jobs);
@@ -1596,9 +2453,102 @@ async function createNotification(userId: string | number, type: string, title: 
     }
   });
 
-  app.post('/api/notifications/test', authenticate, async (req: any, res) => {
-    await createNotification(req.user.id, 'MESSAGE', 'Test Notification', 'This is a test notification to verify the system is working.', '/dashboard');
-    res.json({ success: true });
+  // Saved Jobs Endpoints
+  app.post('/api/jobs/:id/save', authenticate, async (req: any, res) => {
+    if (req.user.role !== 'STUDENT') return res.status(403).json({ error: 'Only students can save jobs' });
+    const jobId = req.params.id;
+    const userId = String(req.user.id);
+    const { db: firestore } = getFirebase();
+
+    if (!firestore) {
+      try {
+        const existing = db.prepare('SELECT * FROM saved_jobs WHERE user_id = ? AND job_id = ?').get(userId, jobId);
+        if (existing) {
+          db.prepare('DELETE FROM saved_jobs WHERE user_id = ? AND job_id = ?').run(userId, jobId);
+          res.json({ saved: false });
+        } else {
+          db.prepare('INSERT INTO saved_jobs (user_id, job_id) VALUES (?, ?)').run(userId, jobId);
+          res.json({ saved: true });
+        }
+      } catch (err: any) {
+        res.status(500).json({ error: err.message });
+      }
+      return;
+    }
+
+    try {
+      const savedRef = firestore.collection('saved_jobs').doc(`${userId}_${jobId}`);
+      const doc = await savedRef.get();
+      if (doc.exists) {
+        await savedRef.delete();
+        res.json({ saved: false });
+      } else {
+        await savedRef.set({
+          user_id: userId,
+          job_id: jobId,
+          created_at: new Date().toISOString()
+        });
+        res.json({ saved: true });
+      }
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  app.get('/api/jobs/saved', authenticate, async (req: any, res) => {
+    if (req.user.role !== 'STUDENT') return res.status(403).json({ error: 'Only students can view saved jobs' });
+    const userId = String(req.user.id);
+    const { db: firestore } = getFirebase();
+
+    if (!firestore) {
+      try {
+        const savedJobs = db.prepare(`
+          SELECT j.*, rp.company_name, rp.profile_picture_url as company_logo
+          FROM saved_jobs sj
+          JOIN jobs j ON sj.job_id = j.id
+          LEFT JOIN recruiter_profiles rp ON j.recruiter_id = rp.user_id
+          WHERE sj.user_id = ?
+          ORDER BY sj.created_at DESC
+        `).all(userId);
+        res.json(savedJobs);
+      } catch (err: any) {
+        res.status(500).json({ error: err.message });
+      }
+      return;
+    }
+
+    try {
+      const savedSnap = await firestore.collection('saved_jobs')
+        .where('user_id', '==', userId)
+        .get();
+      
+      const savedDocs = savedSnap.docs.sort((a, b) => {
+        const dateA = new Date(a.data().created_at || 0).getTime();
+        const dateB = new Date(b.data().created_at || 0).getTime();
+        return dateB - dateA;
+      });
+
+      const jobs = await Promise.all(savedDocs.map(async savedDoc => {
+        const jobId = savedDoc.data().job_id;
+        const jobDoc = await firestore.collection('jobs').doc(jobId).get();
+        if (!jobDoc.exists) return null;
+        
+        const jobData = jobDoc.data();
+        const recruiterSnap = await firestore.collection('recruiter_profiles').doc(jobData?.recruiter_id).get();
+        
+        return {
+          id: jobDoc.id,
+          ...jobData,
+          company_name: recruiterSnap.exists ? recruiterSnap.data()?.company_name : 'Unknown Company',
+          company_logo: recruiterSnap.exists ? recruiterSnap.data()?.profile_picture_url : null
+        };
+      }));
+
+      res.json(jobs.filter(j => j !== null));
+    } catch (err: any) {
+      console.error('Error fetching saved jobs:', err);
+      res.status(500).json({ error: err.message });
+    }
   });
 
   // Vite middleware
@@ -1621,4 +2571,7 @@ async function createNotification(userId: string | number, type: string, title: 
   });
 }
 
-startServer();
+startServer().catch(err => {
+  console.error('Failed to start server:', err);
+  process.exit(1);
+});

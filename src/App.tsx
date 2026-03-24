@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import { 
   Briefcase, 
@@ -29,16 +29,22 @@ import {
   TrendingUp,
   ArrowRight,
   MessageCircle,
+  MessageSquare,
   Send,
   X,
   Calendar,
   Video,
   Bell,
   BellRing,
-  Trash2
+  Trash2,
+  Phone,
+  Camera,
+  Bookmark,
+  Mail,
+  Star
 } from 'lucide-react';
 import { cn } from './lib/utils';
-import { User as UserType, Job, Application, StudentProfile, RecruiterProfile, Message, Interview, Notification as NotificationType } from './types';
+import { User as UserType, Job, Application, StudentProfile, RecruiterProfile, Message, Interview, Notification as NotificationType, FriendRequest, Friendship } from './types';
 
 // --- Components ---
 
@@ -48,6 +54,7 @@ const Button = ({ className, variant = 'primary', ...props }: React.ButtonHTMLAt
     secondary: 'bg-zinc-100 text-zinc-900 hover:bg-zinc-200',
     outline: 'border border-zinc-200 text-zinc-700 hover:bg-zinc-50',
     danger: 'bg-red-50 text-red-600 hover:bg-red-100 border border-red-100',
+    neutral: 'bg-zinc-50 text-zinc-600 hover:bg-zinc-100 border border-zinc-200',
   };
   return (
     <button 
@@ -119,21 +126,29 @@ const safeParse = (data: any, fallback: any = []) => {
 export default function App() {
   const [user, setUser] = useState<UserType | null>(null);
   const [loading, setLoading] = useState(true);
-  const [view, setView] = useState<'dashboard' | 'jobs' | 'applications' | 'interviews' | 'profile' | 'admin'>('dashboard');
+  const [view, setView] = useState<'dashboard' | 'jobs' | 'applications' | 'interviews' | 'profile' | 'admin' | 'network' | 'saved'>('dashboard');
+  const [isAnalyzerOpen, setIsAnalyzerOpen] = useState(false);
   const [authMode, setAuthMode] = useState<'login' | 'register'>('login');
   const [notifications, setNotifications] = useState<NotificationType[]>([]);
   const [showNotifications, setShowNotifications] = useState(false);
   const [lastNotificationId, setLastNotificationId] = useState<string | number | null>(null);
+  const lastNotificationIdRef = useRef<string | number | null>(null);
+  const [isFirstTime, setIsFirstTime] = useState(false);
   const [toast, setToast] = useState<{ title: string; content: string; link?: string } | null>(null);
   const [viewParams, setViewParams] = useState<any>(null);
+  const [savedJobIds, setSavedJobIds] = useState<string[]>([]);
 
   useEffect(() => {
+    console.log('[App] Initial checkAuth call');
     checkAuth();
   }, []);
 
   useEffect(() => {
     if (user) {
       fetchNotifications();
+      if (user.role === 'STUDENT') {
+        fetchSavedJobs();
+      }
       const interval = setInterval(fetchNotifications, 10000); // Poll every 10s
       
       // Request notification permission
@@ -156,7 +171,7 @@ export default function App() {
         const unread = data.filter((n: any) => !n.is_read);
         if (unread.length > 0) {
           const latestId = unread[0].id;
-          if (latestId !== lastNotificationId) {
+          if (latestId !== lastNotificationIdRef.current) {
             const latest = unread[0];
             setToast({ title: latest.title, content: latest.content, link: latest.link });
             setTimeout(() => setToast(null), 5000);
@@ -165,12 +180,40 @@ export default function App() {
             if ('Notification' in window && Notification.permission === 'granted') {
               new Notification(latest.title, { body: latest.content });
             }
+            lastNotificationIdRef.current = latestId;
             setLastNotificationId(latestId);
           }
         }
       }
     } catch (err) {
       console.error('Error fetching notifications:', err);
+    }
+  };
+
+  const fetchSavedJobs = async () => {
+    try {
+      const res = await fetch('/api/jobs/saved');
+      if (res.ok) {
+        const data = await res.json();
+        setSavedJobIds(data.map((j: any) => String(j.id)));
+      }
+    } catch (err) {
+      console.error('Failed to fetch saved jobs:', err);
+    }
+  };
+
+  const toggleSave = async (e: React.MouseEvent, jobId: string | number) => {
+    e.stopPropagation();
+    try {
+      const res = await fetch(`/api/jobs/${jobId}/save`, { method: 'POST' });
+      if (res.ok) {
+        const { saved } = await res.json();
+        setSavedJobIds(prev => 
+          saved ? [...prev, String(jobId)] : prev.filter(id => id !== String(jobId))
+        );
+      }
+    } catch (err) {
+      console.error('Failed to toggle save:', err);
     }
   };
 
@@ -197,6 +240,7 @@ export default function App() {
     if (link.startsWith('/interviews')) setView('interviews');
     if (link.startsWith('/profile')) setView('profile');
     if (link.startsWith('/dashboard')) setView('dashboard');
+    if (link.startsWith('/analyzer')) setIsAnalyzerOpen(true);
     setShowNotifications(false);
   };
 
@@ -209,16 +253,26 @@ export default function App() {
     }
   };
 
-  const checkAuth = async () => {
+  const checkAuth = async (isSignup?: boolean) => {
+    console.log('[App] checkAuth started');
     try {
       const res = await fetch('/api/auth/me');
+      console.log('[App] checkAuth response status:', res.status);
       if (res.ok) {
         const data = await res.json();
+        console.log('[App] checkAuth success, user:', data.user?.email);
         setUser(data.user);
+        if (isSignup) {
+          setView('profile');
+          setIsFirstTime(true);
+        }
+      } else {
+        console.log('[App] checkAuth failed (unauthorized)');
       }
     } catch (err) {
-      console.error(err);
+      console.error('[App] checkAuth error:', err);
     } finally {
+      console.log('[App] checkAuth finished, setting loading to false');
       setLoading(false);
     }
   };
@@ -271,6 +325,10 @@ export default function App() {
           <div className="hidden md:flex items-center gap-1">
             <NavButton active={view === 'dashboard'} onClick={() => setView('dashboard')} icon={<BarChart3 size={18} />}>Dashboard</NavButton>
             <NavButton active={view === 'jobs'} onClick={() => setView('jobs')} icon={<Briefcase size={18} />}>Jobs</NavButton>
+            <NavButton active={view === 'network'} onClick={() => setView('network')} icon={<Users size={18} />}>Network</NavButton>
+            {user.role === 'STUDENT' && (
+              <NavButton active={view === 'saved'} onClick={() => setView('saved')} icon={<Bookmark size={18} />}>Saved</NavButton>
+            )}
             <NavButton active={view === 'applications'} onClick={() => setView('applications')} icon={<FileText size={18} />}>Applications</NavButton>
             <NavButton active={view === 'interviews'} onClick={() => setView('interviews')} icon={<Calendar size={18} />}>Interviews</NavButton>
             {user.role === 'ADMIN' && (
@@ -304,8 +362,12 @@ export default function App() {
           </div>
 
           <button onClick={() => setView('profile')} className="flex items-center gap-2 hover:bg-zinc-50 p-1 pr-3 rounded-full transition-all">
-            <div className="w-8 h-8 bg-zinc-100 rounded-full flex items-center justify-center text-zinc-600">
-              <User size={18} />
+            <div className="w-8 h-8 bg-zinc-100 rounded-full flex items-center justify-center text-zinc-600 overflow-hidden">
+              {user.profile_picture_url ? (
+                <img src={user.profile_picture_url} alt={user.name || 'User'} className="w-full h-full object-cover" referrerPolicy="no-referrer" />
+              ) : (
+                <User size={18} />
+              )}
             </div>
             <span className="text-sm font-medium text-zinc-700">{user.name || user.email.split('@')[0]}</span>
           </button>
@@ -325,10 +387,34 @@ export default function App() {
             transition={{ duration: 0.2 }}
           >
             {view === 'dashboard' && <Dashboard user={user} setView={setView} onRefreshNotifications={fetchNotifications} />}
-            {view === 'jobs' && <JobsView user={user} />}
+            {view === 'jobs' && <JobsView user={user} savedJobIds={savedJobIds} onToggleSave={toggleSave} />}
+            {view === 'saved' && user.role === 'STUDENT' && (
+              <SavedJobsView 
+                user={user} 
+                onSelectJob={(job) => {
+                  // This is a bit hacky but works to open the job details from saved view
+                  // We'd ideally want a more robust way to handle cross-view job selection
+                  setView('jobs');
+                  // We need a way to pass the selected job to JobsView
+                }} 
+                onToggleSave={toggleSave}
+              />
+            )}
             {view === 'applications' && <ApplicationsView user={user} viewParams={viewParams} />}
             {view === 'interviews' && <InterviewsView user={user} />}
-            {view === 'profile' && <ProfileView user={user} onUpdate={checkAuth} />}
+            {view === 'network' && <NetworkView user={user} setToast={setToast} />}
+            {view === 'profile' && (
+              <ProfileView 
+                user={user} 
+                onUpdate={() => {
+                  checkAuth();
+                  if (isFirstTime) {
+                    setView('dashboard');
+                    setIsFirstTime(false);
+                  }
+                }} 
+              />
+            )}
             {view === 'admin' && user.role === 'ADMIN' && <AdminView />}
           </motion.div>
         </AnimatePresence>
@@ -337,15 +423,74 @@ export default function App() {
       {/* Mobile Bottom Navigation */}
       <nav className="md:hidden fixed bottom-0 left-0 right-0 bg-white border-t border-zinc-100 flex items-center justify-around py-3 px-4 z-50 shadow-[0_-4px_10px_rgba(0,0,0,0.02)]">
         <MobileNavButton active={view === 'dashboard'} onClick={() => setView('dashboard')} icon={<BarChart3 size={20} />} label="Home" />
+        {user.role === 'STUDENT' && (
+          <MobileNavButton active={view === 'saved'} onClick={() => setView('saved')} icon={<Bookmark size={20} />} label="Saved" />
+        )}
         <MobileNavButton active={view === 'jobs'} onClick={() => setView('jobs')} icon={<Briefcase size={20} />} label="Jobs" />
+        <MobileNavButton active={view === 'network'} onClick={() => setView('network')} icon={<Users size={20} />} label="Network" />
         <MobileNavButton active={view === 'applications'} onClick={() => setView('applications')} icon={<FileText size={20} />} label="Apps" />
         <MobileNavButton active={view === 'interviews'} onClick={() => setView('interviews')} icon={<Calendar size={20} />} label="Events" />
-        {user.role === 'ADMIN' ? (
-          <MobileNavButton active={view === 'admin'} onClick={() => setView('admin')} icon={<Shield size={20} />} label="Admin" />
-        ) : (
-          <MobileNavButton active={view === 'profile'} onClick={() => setView('profile')} icon={<User size={20} />} label="Profile" />
-        )}
+        <MobileNavButton active={view === 'profile'} onClick={() => setView('profile')} icon={<User size={20} />} label="Profile" />
       </nav>
+
+      {/* Floating Resume Analyzer Button */}
+      {user.role === 'STUDENT' && (
+        <div className="fixed bottom-24 md:bottom-8 right-6 z-40">
+          <motion.button
+            whileHover={{ scale: 1.1 }}
+            whileTap={{ scale: 0.9 }}
+            onClick={() => setIsAnalyzerOpen(true)}
+            className="w-14 h-14 bg-black text-white rounded-full shadow-lg flex items-center justify-center hover:bg-zinc-800 transition-colors group relative"
+          >
+            <Zap size={24} />
+            <span className="absolute right-full mr-3 px-2 py-1 bg-zinc-800 text-white text-xs rounded opacity-0 group-hover:opacity-100 transition-opacity whitespace-nowrap pointer-events-none">
+              Resume Analyzer
+            </span>
+          </motion.button>
+        </div>
+      )}
+
+      {/* Resume Analyzer Modal */}
+      <AnimatePresence>
+        {isAnalyzerOpen && (
+          <div className="fixed inset-0 z-[60] flex items-center justify-center p-4">
+            <motion.div
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
+              onClick={() => setIsAnalyzerOpen(false)}
+              className="absolute inset-0 bg-black/40 backdrop-blur-sm"
+            />
+            <motion.div
+              initial={{ opacity: 0, scale: 0.95, y: 20 }}
+              animate={{ opacity: 1, scale: 1, y: 0 }}
+              exit={{ opacity: 0, scale: 0.95, y: 20 }}
+              className="relative w-full max-w-4xl max-h-[90vh] bg-white rounded-3xl shadow-2xl overflow-hidden flex flex-col"
+            >
+              <div className="p-6 border-b border-zinc-100 flex items-center justify-between shrink-0">
+                <div className="flex items-center gap-3">
+                  <div className="w-10 h-10 bg-black rounded-xl flex items-center justify-center text-white">
+                    <Zap size={20} />
+                  </div>
+                  <div>
+                    <h3 className="font-bold text-lg">Resume AI Analyzer</h3>
+                    <p className="text-xs text-zinc-500">Get professional feedback and ATS tips</p>
+                  </div>
+                </div>
+                <button 
+                  onClick={() => setIsAnalyzerOpen(false)}
+                  className="p-2 hover:bg-zinc-100 rounded-full transition-colors"
+                >
+                  <X size={20} />
+                </button>
+              </div>
+              <div className="flex-1 overflow-y-auto p-6">
+                <ResumeAnalyzer user={user} />
+              </div>
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
     </div>
   );
 }
@@ -387,11 +532,12 @@ function MobileNavButton({ active, onClick, icon, label }: { active: boolean; on
 
 // --- Auth Page ---
 
-function AuthPage({ onAuth, mode, setMode }: { onAuth: () => void; mode: 'login' | 'register'; setMode: (m: 'login' | 'register') => void }) {
+function AuthPage({ onAuth, mode, setMode }: { onAuth: (isSignup?: boolean) => void; mode: 'login' | 'register'; setMode: (m: 'login' | 'register') => void }) {
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [role, setRole] = useState<'STUDENT' | 'RECRUITER'>('STUDENT');
   const [name, setName] = useState('');
+  const [username, setUsername] = useState('');
   const [companyName, setCompanyName] = useState('');
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
@@ -402,7 +548,7 @@ function AuthPage({ onAuth, mode, setMode }: { onAuth: () => void; mode: 'login'
     setLoading(true);
     try {
       const endpoint = mode === 'login' ? '/api/auth/login' : '/api/auth/register';
-      const body = mode === 'login' ? { email, password } : { email, password, role, name, company_name: companyName };
+      const body = mode === 'login' ? { email, password } : { email, password, role, name, company_name: companyName, username };
       const res = await fetch(endpoint, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -410,7 +556,7 @@ function AuthPage({ onAuth, mode, setMode }: { onAuth: () => void; mode: 'login'
       });
       const data = await res.json();
       if (res.ok) {
-        onAuth();
+        onAuth(mode === 'register');
       } else {
         setError(data.error);
       }
@@ -432,10 +578,13 @@ function AuthPage({ onAuth, mode, setMode }: { onAuth: () => void; mode: 'login'
 
         <form onSubmit={handleSubmit} className="space-y-4">
           {mode === 'register' && (
-            <div className="flex p-1 bg-zinc-100 rounded-lg mb-4">
-              <button type="button" onClick={() => setRole('STUDENT')} className={cn('flex-1 py-1.5 text-sm font-medium rounded-md transition-all', role === 'STUDENT' ? 'bg-white shadow-sm text-black' : 'text-zinc-500')}>Student</button>
-              <button type="button" onClick={() => setRole('RECRUITER')} className={cn('flex-1 py-1.5 text-sm font-medium rounded-md transition-all', role === 'RECRUITER' ? 'bg-white shadow-sm text-black' : 'text-zinc-500')}>Recruiter</button>
-            </div>
+            <>
+              <div className="flex p-1 bg-zinc-100 rounded-lg mb-4">
+                <button type="button" onClick={() => setRole('STUDENT')} className={cn('flex-1 py-1.5 text-sm font-medium rounded-md transition-all', role === 'STUDENT' ? 'bg-white shadow-sm text-black' : 'text-zinc-500')}>Student</button>
+                <button type="button" onClick={() => setRole('RECRUITER')} className={cn('flex-1 py-1.5 text-sm font-medium rounded-md transition-all', role === 'RECRUITER' ? 'bg-white shadow-sm text-black' : 'text-zinc-500')}>Recruiter</button>
+              </div>
+              <Input name="username" placeholder="Username" value={username} onChange={e => setUsername(e.target.value)} required autoComplete="username" />
+            </>
           )}
 
           {mode === 'register' && (
@@ -550,6 +699,319 @@ function NotificationCenter({
   );
 }
 
+// --- Resume Analyzer ---
+
+function ResumeAnalyzer({ user }: { user: UserType }) {
+  const [file, setFile] = useState<File | null>(null);
+  const [loading, setLoading] = useState(false);
+  const [analysis, setAnalysis] = useState<any>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [history, setHistory] = useState<any[]>([]);
+
+  useEffect(() => {
+    fetchHistory();
+  }, []);
+
+  const fetchHistory = async () => {
+    try {
+      const res = await fetch('/api/resume-analyses');
+      if (res.ok) {
+        const text = await res.text();
+        try {
+          setHistory(JSON.parse(text));
+        } catch (e) {
+          console.error('Failed to parse history JSON:', text);
+        }
+      }
+    } catch (err) {
+      console.error('Failed to fetch history:', err);
+    }
+  };
+
+  const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    if (e.target.files && e.target.files[0]) {
+      setFile(e.target.files[0]);
+      setAnalysis(null);
+      setError(null);
+    }
+  };
+
+  const analyzeResume = async () => {
+    if (!file) return;
+    setLoading(true);
+    setError(null);
+
+    const safeJson = async (res: Response) => {
+      const text = await res.text();
+      try {
+        return JSON.parse(text);
+      } catch (e) {
+        return { error: text || 'Unknown server error' };
+      }
+    };
+
+    try {
+      // 1. Extract text from PDF via backend
+      const formData = new FormData();
+      formData.append('file', file);
+      const extractRes = await fetch('/api/extract-text', {
+        method: 'POST',
+        body: formData,
+      });
+
+      const extractData = await safeJson(extractRes);
+      if (!extractRes.ok) {
+        throw new Error(extractData.error || 'Failed to extract text from PDF');
+      }
+      const { text } = extractData;
+
+      // 2. Call server for analysis
+      const analysisRes = await fetch('/api/analyze-resume', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ text }),
+      });
+
+      const analysisData = await safeJson(analysisRes);
+      if (!analysisRes.ok) {
+        throw new Error(analysisData.error || 'Failed to analyze resume');
+      }
+
+      const result = analysisData;
+      setAnalysis(result);
+
+      // 3. Save analysis to backend
+      await fetch('/api/resume-analysis', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          resume_name: file.name,
+          score: result.score,
+          analysis_json: result
+        }),
+      });
+
+      fetchHistory();
+    } catch (err: any) {
+      console.error('Analysis error:', err);
+      setError(err.message || 'Failed to analyze resume');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  return (
+    <div className="max-w-4xl mx-auto space-y-8">
+      <div className="flex items-center justify-between">
+        <div>
+          <h2 className="text-3xl font-bold tracking-tight">Resume AI Analyzer</h2>
+          <p className="text-zinc-500 mt-1">Get professional feedback and ATS optimization tips for your resume.</p>
+        </div>
+        <div className="w-12 h-12 bg-black rounded-2xl flex items-center justify-center text-white">
+          <Zap size={24} />
+        </div>
+      </div>
+
+      <Card className="p-8 border-dashed border-2 border-zinc-200 bg-zinc-50/50 text-center">
+        <div className="max-w-sm mx-auto space-y-4">
+          <div className="w-16 h-16 bg-white rounded-2xl shadow-sm mx-auto flex items-center justify-center text-zinc-400">
+            <FileText size={32} />
+          </div>
+          <div>
+            <h4 className="font-bold text-lg">Upload your Resume</h4>
+            <p className="text-sm text-zinc-500">PDF format recommended for best results.</p>
+          </div>
+          <div className="flex flex-col gap-4">
+            <input 
+              type="file" 
+              accept=".pdf" 
+              onChange={handleFileChange}
+              className="block w-full text-sm text-zinc-500 file:mr-4 file:py-2 file:px-4 file:rounded-full file:border-0 file:text-sm file:font-semibold file:bg-black file:text-white hover:file:bg-zinc-800 cursor-pointer"
+            />
+            <Button 
+              onClick={analyzeResume} 
+              disabled={!file || loading}
+              className="w-full"
+            >
+              {loading ? <Loader2 className="animate-spin mr-2" size={18} /> : <Zap className="mr-2" size={18} />}
+              {loading ? 'Analyzing...' : 'Analyze Resume'}
+            </Button>
+          </div>
+          {error && <p className="text-xs text-red-500 font-medium">{error}</p>}
+        </div>
+      </Card>
+
+      {analysis && (
+        <motion.div 
+          initial={{ opacity: 0, y: 20 }}
+          animate={{ opacity: 1, y: 0 }}
+          className="space-y-8"
+        >
+          {/* Score Card */}
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+            <Card className="p-6 flex flex-col items-center justify-center text-center bg-black text-white border-none md:col-span-1">
+              <p className="text-xs font-bold text-zinc-400 uppercase tracking-widest mb-2">Resume Score</p>
+              <div className="relative w-32 h-32 flex items-center justify-center">
+                <svg className="w-full h-full transform -rotate-90">
+                  <circle
+                    cx="64"
+                    cy="64"
+                    r="58"
+                    stroke="currentColor"
+                    strokeWidth="8"
+                    fill="transparent"
+                    className="text-white/10"
+                  />
+                  <circle
+                    cx="64"
+                    cy="64"
+                    r="58"
+                    stroke="currentColor"
+                    strokeWidth="8"
+                    fill="transparent"
+                    strokeDasharray={364.4}
+                    strokeDashoffset={364.4 - (364.4 * (analysis.score || 0)) / 100}
+                    className="text-emerald-400 transition-all duration-1000"
+                  />
+                </svg>
+                <span className="absolute text-4xl font-bold">{analysis.score}</span>
+              </div>
+              <p className="mt-4 text-sm font-medium text-emerald-400">{analysis.overall_verdict}</p>
+            </Card>
+
+            <Card className="p-6 md:col-span-2 space-y-4">
+              <h3 className="font-bold text-lg flex items-center gap-2">
+                <TrendingUp size={20} className="text-emerald-500" />
+                Professional Summary
+              </h3>
+              <p className="text-zinc-600 leading-relaxed">{analysis.summary}</p>
+              <div className="grid grid-cols-2 gap-4 pt-4">
+                <div className="p-3 bg-emerald-50 rounded-xl border border-emerald-100">
+                  <p className="text-[10px] font-bold text-emerald-600 uppercase mb-1">Strengths</p>
+                  <p className="text-xl font-bold text-emerald-700">{analysis.strengths?.length || 0}</p>
+                </div>
+                <div className="p-3 bg-amber-50 rounded-xl border border-amber-100">
+                  <p className="text-[10px] font-bold text-amber-600 uppercase mb-1">Improvements</p>
+                  <p className="text-xl font-bold text-amber-700">{(analysis.weaknesses?.length || 0) + (analysis.missing_skills?.length || 0)}</p>
+                </div>
+              </div>
+            </Card>
+          </div>
+
+          {/* Detailed Feedback */}
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
+            <div className="space-y-6">
+              <section>
+                <h4 className="text-sm font-bold text-zinc-400 uppercase tracking-widest mb-4 flex items-center gap-2">
+                  <CheckCircle size={16} className="text-emerald-500" />
+                  Key Strengths
+                </h4>
+                <div className="space-y-2">
+                  {analysis.strengths?.map((s: string, i: number) => (
+                    <div key={i} className="flex items-start gap-3 p-3 bg-white border border-zinc-100 rounded-xl shadow-sm">
+                      <div className="w-5 h-5 bg-emerald-100 text-emerald-600 rounded-full flex items-center justify-center shrink-0 mt-0.5">
+                        <CheckCircle size={12} />
+                      </div>
+                      <p className="text-sm text-zinc-700">{s}</p>
+                    </div>
+                  ))}
+                </div>
+              </section>
+
+              <section>
+                <h4 className="text-sm font-bold text-zinc-400 uppercase tracking-widest mb-4 flex items-center gap-2">
+                  <XCircle size={16} className="text-red-500" />
+                  Weaknesses
+                </h4>
+                <div className="space-y-2">
+                  {analysis.weaknesses?.map((w: string, i: number) => (
+                    <div key={i} className="flex items-start gap-3 p-3 bg-white border border-zinc-100 rounded-xl shadow-sm">
+                      <div className="w-5 h-5 bg-red-100 text-red-600 rounded-full flex items-center justify-center shrink-0 mt-0.5">
+                        <XCircle size={12} />
+                      </div>
+                      <p className="text-sm text-zinc-700">{w}</p>
+                    </div>
+                  ))}
+                </div>
+              </section>
+            </div>
+
+            <div className="space-y-6">
+              <section>
+                <h4 className="text-sm font-bold text-zinc-400 uppercase tracking-widest mb-4 flex items-center gap-2">
+                  <Star size={16} className="text-amber-500" />
+                  Missing Skills
+                </h4>
+                <div className="flex flex-wrap gap-2">
+                  {analysis.missing_skills?.map((skill: string, i: number) => (
+                    <Badge key={i} variant="warning" className="px-3 py-1">{skill}</Badge>
+                  ))}
+                </div>
+              </section>
+
+              <section>
+                <h4 className="text-sm font-bold text-zinc-400 uppercase tracking-widest mb-4 flex items-center gap-2">
+                  <Search size={16} className="text-blue-500" />
+                  ATS Keywords to Add
+                </h4>
+                <div className="flex flex-wrap gap-2">
+                  {analysis.keywords_to_add?.map((kw: string, i: number) => (
+                    <Badge key={i} variant="info" className="px-3 py-1">{kw}</Badge>
+                  ))}
+                </div>
+              </section>
+
+              <section>
+                <h4 className="text-sm font-bold text-zinc-400 uppercase tracking-widest mb-4 flex items-center gap-2">
+                  <Filter size={16} className="text-indigo-500" />
+                  Formatting Tips
+                </h4>
+                <div className="space-y-2">
+                  {analysis.formatting_tips?.map((tip: string, i: number) => (
+                    <div key={i} className="p-3 bg-indigo-50/30 border border-indigo-100 rounded-xl text-sm text-indigo-900">
+                      {tip}
+                    </div>
+                  ))}
+                </div>
+              </section>
+            </div>
+          </div>
+        </motion.div>
+      )}
+
+      {/* History */}
+      {history.length > 0 && (
+        <section className="pt-8 border-t border-zinc-100">
+          <h3 className="text-lg font-bold mb-4">Analysis History</h3>
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+            {history.map((h) => (
+              <Card 
+                key={h.id} 
+                className="p-4 flex items-center justify-between cursor-pointer hover:border-zinc-300 transition-all bg-white"
+                onClick={() => setAnalysis(h.analysis_json)}
+              >
+                <div className="flex items-center gap-3">
+                  <div className="w-10 h-10 bg-zinc-100 rounded-lg flex items-center justify-center text-zinc-400">
+                    <FileText size={20} />
+                  </div>
+                  <div>
+                    <p className="text-sm font-bold truncate max-w-[150px]">{h.resume_name}</p>
+                    <p className="text-[10px] text-zinc-500 uppercase font-medium">{new Date(h.created_at).toLocaleDateString()}</p>
+                  </div>
+                </div>
+                <div className="text-right">
+                  <p className="text-lg font-bold">{h.score}</p>
+                  <p className="text-[8px] font-bold text-zinc-400 uppercase tracking-widest">Score</p>
+                </div>
+              </Card>
+            ))}
+          </div>
+        </section>
+      )}
+    </div>
+  );
+}
+
 // --- Dashboard ---
 
 function Dashboard({ user, setView, onRefreshNotifications }: { user: UserType; setView: (v: any) => void; onRefreshNotifications?: () => void }) {
@@ -619,23 +1081,6 @@ function Dashboard({ user, setView, onRefreshNotifications }: { user: UserType; 
                 ? `You have ${stats?.pendingReviews || 0} new applicants to review today. Your company profile is ${stats?.isVerified === 'Verified' ? '100%' : '85%'} complete.`
                 : "System overview is stable. All platform services are currently operational."}
             </p>
-            <Button 
-              variant="outline" 
-              className="bg-white/10 border-white/20 text-white hover:bg-white/20"
-              onClick={async () => {
-                try {
-                  const res = await fetch('/api/notifications/test', { method: 'POST' });
-                  if (res.ok) {
-                    console.log('Test notification sent');
-                    if (onRefreshNotifications) onRefreshNotifications();
-                  }
-                } catch (err) {
-                  console.error(err);
-                }
-              }}
-            >
-              Send Test Notification
-            </Button>
           </motion.div>
         </div>
         {/* Abstract background elements */}
@@ -862,11 +1307,18 @@ function Dashboard({ user, setView, onRefreshNotifications }: { user: UserType; 
   );
 }
 
-function StatCard({ label, value, icon, trend }: { label: string; value: string | number; icon: React.ReactNode; trend?: string }) {
+function StatCard({ label, value, icon, trend, variant = 'default' }: { label: string; value: string | number; icon: React.ReactNode; trend?: string; variant?: 'default' | 'success' | 'info' | 'warning' }) {
+  const variantStyles = {
+    default: 'text-zinc-900',
+    success: 'text-emerald-600',
+    info: 'text-blue-600',
+    warning: 'text-amber-600'
+  };
+
   return (
     <Card className="p-6 flex flex-col gap-4 hover:shadow-md transition-all border-none bg-white">
       <div className="flex items-center justify-between">
-        <div className="w-12 h-12 bg-zinc-50 rounded-2xl flex items-center justify-center text-zinc-900 border border-zinc-100">
+        <div className={cn("w-12 h-12 bg-zinc-50 rounded-2xl flex items-center justify-center border border-zinc-100", variantStyles[variant])}>
           {icon}
         </div>
         {trend && (
@@ -888,7 +1340,7 @@ function StatCard({ label, value, icon, trend }: { label: string; value: string 
 
 // --- Jobs View ---
 
-function JobsView({ user }: { user: UserType }) {
+function JobsView({ user, savedJobIds, onToggleSave }: { user: UserType, savedJobIds: string[], onToggleSave: (e: React.MouseEvent, jobId: string | number) => void }) {
   const [jobs, setJobs] = useState<Job[]>([]);
   const [loading, setLoading] = useState(true);
   const [showCreateModal, setShowCreateModal] = useState(false);
@@ -949,7 +1401,7 @@ function JobsView({ user }: { user: UserType }) {
         if (locationType === 'remote') {
           matchesLocation = isRemote;
         } else if (locationType === 'nearby') {
-          matchesLocation = isNearby && !isRemote;
+          matchesLocation = true; // Show all jobs, but we'll sort them by proximity
         } else if (locationType === 'relocation') {
           matchesLocation = !isNearby && !isRemote;
         }
@@ -958,6 +1410,26 @@ function JobsView({ user }: { user: UserType }) {
       return matchesSearch && matchesMinMatch && isVisible && matchesLocation;
     })
     .sort((a, b) => {
+      if (locationType === 'nearby' && user.role === 'STUDENT' && studentProfile?.location) {
+        const studentLoc = studentProfile.location.toLowerCase().trim();
+        const locA = (a.location || '').toLowerCase().trim();
+        const locB = (b.location || '').toLowerCase().trim();
+        
+        const isExactA = locA === studentLoc;
+        const isExactB = locB === studentLoc;
+        if (isExactA && !isExactB) return -1;
+        if (!isExactA && isExactB) return 1;
+
+        const isPartialA = locA.includes(studentLoc) || studentLoc.includes(locA);
+        const isPartialB = locB.includes(studentLoc) || studentLoc.includes(locB);
+        if (isPartialA && !isPartialB) return -1;
+        if (!isPartialA && isPartialB) return 1;
+
+        // Remote jobs could be considered "near" in terms of accessibility
+        if (a.work_type === 'REMOTE' && b.work_type !== 'REMOTE') return -1;
+        if (a.work_type !== 'REMOTE' && b.work_type === 'REMOTE') return 1;
+      }
+
       if (sortBy === 'match') return (b.matchPercentage || 0) - (a.matchPercentage || 0);
       if (sortBy === 'title') return a.title.localeCompare(b.title);
       return b.id - a.id; // newest
@@ -1057,9 +1529,36 @@ function JobsView({ user }: { user: UserType }) {
                   <Building2 size={24} />
                 </div>
                 <div className="flex flex-col items-end gap-2">
-                  <Badge variant={job.status === 'APPROVED' ? 'success' : job.status === 'CLOSED' ? 'danger' : 'warning'}>
-                    {job.status}
-                  </Badge>
+                  <div className="flex items-center gap-2">
+                    {user.role === 'STUDENT' && (
+                      <button 
+                        onClick={(e) => onToggleSave(e, job.id)}
+                        className={cn(
+                          "p-2 rounded-lg transition-all",
+                          savedJobIds.includes(String(job.id)) 
+                            ? "bg-black text-white" 
+                            : "bg-zinc-100 text-zinc-400 hover:text-black"
+                        )}
+                        title={savedJobIds.includes(String(job.id)) ? "Unsave Job" : "Save Job"}
+                      >
+                        <Bookmark size={16} fill={savedJobIds.includes(String(job.id)) ? "currentColor" : "none"} />
+                      </button>
+                    )}
+                    {user.role === 'STUDENT' ? (
+                      job.is_applied && (
+                        <Badge variant="success" className="flex items-center gap-1">
+                          <CheckCircle size={12} />
+                          Applied
+                        </Badge>
+                      )
+                    ) : (
+                      job.status !== 'PENDING' && (
+                        <Badge variant={job.status === 'APPROVED' ? 'success' : job.status === 'CLOSED' ? 'danger' : 'warning'}>
+                          {job.status}
+                        </Badge>
+                      )
+                    )}
+                  </div>
                   {user.role === 'STUDENT' && (
                     <div className="text-right">
                       <p className="text-[10px] font-bold text-zinc-400 uppercase">Match</p>
@@ -1122,6 +1621,87 @@ function JobsView({ user }: { user: UserType }) {
           </div>
         )}
       </AnimatePresence>
+    </div>
+  );
+}
+
+function SavedJobsView({ user, onSelectJob, onToggleSave }: { user: UserType; onSelectJob: (job: Job) => void; onToggleSave: (e: React.MouseEvent, jobId: string | number) => Promise<void> }) {
+  const [jobs, setJobs] = useState<Job[]>([]);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    fetchSavedJobs();
+  }, []);
+
+  const fetchSavedJobs = async () => {
+    setLoading(true);
+    try {
+      const res = await fetch('/api/jobs/saved');
+      if (res.ok) setJobs(await res.json());
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const unsaveJob = async (e: React.MouseEvent, jobId: string | number) => {
+    await onToggleSave(e, jobId);
+    fetchSavedJobs();
+  };
+
+  if (loading) return <div className="flex justify-center p-20"><Loader2 className="animate-spin text-zinc-300" /></div>;
+
+  return (
+    <div className="space-y-6">
+      <div>
+        <h2 className="text-2xl font-bold">Saved Jobs</h2>
+        <p className="text-zinc-500">Jobs you've bookmarked for later.</p>
+      </div>
+
+      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+        {jobs.length > 0 ? (
+          jobs.map(job => (
+            <Card key={job.id} className="flex flex-col hover:border-zinc-300 transition-all cursor-pointer group" onClick={() => onSelectJob(job)}>
+              <div className="flex justify-between items-start mb-4">
+                <div className="w-12 h-12 bg-zinc-100 rounded-xl flex items-center justify-center text-zinc-400 group-hover:bg-black group-hover:text-white transition-all overflow-hidden">
+                  {job.company_logo ? (
+                    <img src={job.company_logo} alt={job.company_name} className="w-full h-full object-cover" referrerPolicy="no-referrer" />
+                  ) : (
+                    <Building2 size={24} />
+                  )}
+                </div>
+                <button 
+                  onClick={(e) => unsaveJob(e, job.id)}
+                  className="p-2 bg-black text-white rounded-lg transition-all"
+                >
+                  <Bookmark size={16} fill="currentColor" />
+                </button>
+              </div>
+              <h3 className="font-bold text-lg mb-1 group-hover:text-black">{job.title}</h3>
+              <p className="text-sm text-zinc-500 mb-2">{job.company_name}</p>
+              <div className="flex items-center gap-3 text-xs text-zinc-400 mb-4">
+                <div className="flex items-center gap-1">
+                  <MapPin size={14} />
+                  <span>{job.work_type === 'REMOTE' ? 'Remote' : job.location || 'Location TBD'}</span>
+                </div>
+              </div>
+              <div className="mt-auto pt-4 border-t border-zinc-100 flex items-center justify-end">
+                <div className="flex items-center gap-1 text-xs font-bold text-black uppercase group-hover:translate-x-1 transition-transform">
+                  View & Apply
+                  <ArrowRight size={14} />
+                </div>
+              </div>
+            </Card>
+          ))
+        ) : (
+          <div className="col-span-full py-20 text-center">
+            <div className="w-16 h-16 bg-zinc-100 rounded-full flex items-center justify-center mx-auto mb-4 text-zinc-400">
+              <Bookmark size={32} />
+            </div>
+            <h3 className="text-lg font-bold text-zinc-900">No saved jobs</h3>
+            <p className="text-zinc-500 mt-1">Bookmark jobs you're interested in to see them here.</p>
+          </div>
+        )}
+      </div>
     </div>
   );
 }
@@ -1331,7 +1911,18 @@ function JobDetail({ job, user, onClose, onApplied }: { job: Job; user: UserType
                 </div>
               </div>
             </div>
-            <Badge variant={job.status === 'APPROVED' ? 'success' : job.status === 'CLOSED' ? 'danger' : 'warning'}>{job.status}</Badge>
+            {user.role === 'STUDENT' ? (
+              job.is_applied && (
+                <Badge variant="success" className="flex items-center gap-1">
+                  <CheckCircle size={12} />
+                  Applied
+                </Badge>
+              )
+            ) : (
+              job.status !== 'PENDING' && (
+                <Badge variant={job.status === 'APPROVED' ? 'success' : job.status === 'CLOSED' ? 'danger' : 'warning'}>{job.status}</Badge>
+              )
+            )}
           </div>
 
           <div className="space-y-6">
@@ -1352,7 +1943,11 @@ function JobDetail({ job, user, onClose, onApplied }: { job: Job; user: UserType
             <div className="flex gap-3 pt-6">
               <Button variant="outline" className="flex-1" onClick={onClose}>Close</Button>
               {user.role === 'STUDENT' && job.status !== 'CLOSED' && (
-                <Button className="flex-1" onClick={() => setApplying(true)}>Apply Now</Button>
+                job.is_applied ? (
+                  <Button className="flex-1" disabled>Already Applied</Button>
+                ) : (
+                  <Button className="flex-1" onClick={() => setApplying(true)}>Apply Now</Button>
+                )
               )}
               {user.role === 'STUDENT' && job.status === 'CLOSED' && (
                 <Button className="flex-1" disabled>Job Closed</Button>
@@ -1739,11 +2334,152 @@ function InterviewsView({ user }: { user: UserType }) {
   );
 }
 
+function StudentProfileModal({ studentId, onClose }: { studentId: string; onClose: () => void }) {
+  const [profile, setProfile] = useState<any>(null);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    const fetchProfile = async () => {
+      try {
+        const res = await fetch(`/api/students/${studentId}`);
+        if (res.ok) {
+          setProfile(await res.json());
+        }
+      } finally {
+        setLoading(false);
+      }
+    };
+    fetchProfile();
+  }, [studentId]);
+
+  return (
+    <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+      <motion.div 
+        initial={{ opacity: 0, scale: 0.95 }}
+        animate={{ opacity: 1, scale: 1 }}
+        exit={{ opacity: 0, scale: 0.95 }}
+        className="w-full max-w-2xl"
+      >
+        <Card className="p-0 overflow-hidden max-h-[90vh] flex flex-col">
+          <div className="p-6 border-b border-zinc-100 flex justify-between items-center bg-zinc-50/50">
+            <h3 className="text-xl font-bold">Student Profile</h3>
+            <button onClick={onClose} className="p-2 hover:bg-zinc-200 rounded-full transition-colors">
+              <X size={20} />
+            </button>
+          </div>
+          
+          <div className="flex-1 overflow-y-auto p-8 space-y-8">
+            {loading ? (
+              <div className="flex justify-center py-20"><Loader2 className="animate-spin text-zinc-300" /></div>
+            ) : profile ? (
+              <>
+                <div className="flex items-center gap-6">
+                  <div className="w-24 h-24 rounded-2xl bg-zinc-100 border-2 border-zinc-200 overflow-hidden flex items-center justify-center">
+                    {profile.profile_picture_url ? (
+                      <img src={profile.profile_picture_url} alt={profile.name} className="w-full h-full object-cover" referrerPolicy="no-referrer" />
+                    ) : (
+                      <User size={32} className="text-zinc-300" />
+                    )}
+                  </div>
+                  <div>
+                    <h4 className="text-2xl font-bold">{profile.name}</h4>
+                    {profile.headline && (
+                      <p className="text-zinc-600 font-medium mt-1">{profile.headline}</p>
+                    )}
+                    <div className="flex flex-wrap gap-3 mt-2">
+                      {profile.location && (
+                        <div className="flex items-center gap-1 text-sm text-zinc-500">
+                          <MapPin size={14} />
+                          {profile.location}
+                        </div>
+                      )}
+                      {profile.phone && (
+                        <div className="flex items-center gap-1 text-sm text-zinc-500">
+                          <Phone size={14} />
+                          {profile.phone}
+                        </div>
+                      )}
+                      {profile.email && (
+                        <div className="flex items-center gap-1 text-sm text-zinc-500">
+                          <Mail size={14} />
+                          {profile.email}
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                </div>
+
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
+                  <div className="space-y-6">
+                    <div>
+                      <h5 className="text-xs font-bold text-zinc-400 uppercase tracking-wider mb-2">Education</h5>
+                      <div className="space-y-2">
+                        <p className="text-zinc-700 font-bold">{profile.college_name || 'Not specified'}</p>
+                        <p className="text-zinc-600 text-sm">{profile.degree} {profile.branch ? `in ${profile.branch}` : ''}</p>
+                        <div className="flex items-center gap-4 text-xs text-zinc-500">
+                          {profile.graduation_year && (
+                            <span className="flex items-center gap-1"><Calendar size={12} /> Class of {profile.graduation_year}</span>
+                          )}
+                          {profile.cgpa && (
+                            <span className="flex items-center gap-1"><Star size={12} className="text-amber-500" /> CGPA: {profile.cgpa}</span>
+                          )}
+                        </div>
+                      </div>
+                    </div>
+                    <div>
+                      <h5 className="text-xs font-bold text-zinc-400 uppercase tracking-wider mb-2">Experience</h5>
+                      <p className="text-zinc-700">{profile.experience_years ? `${profile.experience_years} years` : 'Not specified'}</p>
+                    </div>
+                  </div>
+                  <div>
+                    <h5 className="text-xs font-bold text-zinc-400 uppercase tracking-wider mb-2">Skills</h5>
+                    <div className="flex flex-wrap gap-2">
+                      {profile.skills?.map((skill: string) => (
+                        <Badge key={skill} variant="info">{skill}</Badge>
+                      )) || <span className="text-zinc-400 text-sm italic">No skills listed</span>}
+                    </div>
+                  </div>
+                </div>
+
+                <div>
+                  <h5 className="text-xs font-bold text-zinc-400 uppercase tracking-wider mb-2">About</h5>
+                  <p className="text-zinc-700 whitespace-pre-wrap leading-relaxed">{profile.bio || 'No bio provided.'}</p>
+                </div>
+
+                <div className="flex gap-4 pt-4 border-t border-zinc-100">
+                  {profile.linkedin_url && (
+                    <a href={profile.linkedin_url} target="_blank" rel="noopener noreferrer" className="p-2 bg-zinc-100 rounded-lg hover:bg-zinc-200 transition-colors">
+                      <Linkedin size={20} className="text-blue-600" />
+                    </a>
+                  )}
+                  {profile.github_url && (
+                    <a href={profile.github_url} target="_blank" rel="noopener noreferrer" className="p-2 bg-zinc-100 rounded-lg hover:bg-zinc-200 transition-colors">
+                      <Github size={20} />
+                    </a>
+                  )}
+                  {profile.portfolio_url && (
+                    <a href={profile.portfolio_url} target="_blank" rel="noopener noreferrer" className="p-2 bg-zinc-100 rounded-lg hover:bg-zinc-200 transition-colors">
+                      <Globe size={20} className="text-emerald-600" />
+                    </a>
+                  )}
+                </div>
+              </>
+            ) : (
+              <div className="text-center py-20 text-zinc-400">Profile not found.</div>
+            )}
+          </div>
+        </Card>
+      </motion.div>
+    </div>
+  );
+}
+
 function ApplicationsView({ user, viewParams }: { user: UserType; viewParams?: any }) {
   const [apps, setApps] = useState<Application[]>([]);
   const [loading, setLoading] = useState(true);
   const [selectedChat, setSelectedChat] = useState<Application | null>(null);
   const [schedulingInterview, setSchedulingInterview] = useState<Application | null>(null);
+  const [viewingStudentId, setViewingStudentId] = useState<string | null>(null);
 
   useEffect(() => {
     fetchApps();
@@ -1814,7 +2550,19 @@ function ApplicationsView({ user, viewParams }: { user: UserType; viewParams?: a
                       {app.job_status}
                     </Badge>
                   </td>
-                  <td className="px-6 py-4 text-zinc-500">{user.role === 'RECRUITER' ? app.student_name : app.company_name}</td>
+                  <td className="px-6 py-4 text-zinc-500">
+                    {user.role === 'RECRUITER' ? (
+                      <button 
+                        onClick={() => setViewingStudentId(app.student_id)}
+                        className="text-sm font-medium hover:text-black hover:underline transition-all flex items-center gap-2"
+                      >
+                        <User size={14} className="text-zinc-400" />
+                        {app.student_name}
+                      </button>
+                    ) : (
+                      app.company_name
+                    )}
+                  </td>
                   <td className="px-6 py-4 text-zinc-500 text-sm">{new Date(app.created_at).toLocaleDateString()}</td>
                   <td className="px-6 py-4">
                     <a 
@@ -1905,6 +2653,12 @@ function ApplicationsView({ user, viewParams }: { user: UserType; viewParams?: a
             }}
           />
         )}
+        {viewingStudentId && (
+          <StudentProfileModal 
+            studentId={viewingStudentId} 
+            onClose={() => setViewingStudentId(null)} 
+          />
+        )}
       </AnimatePresence>
     </div>
   );
@@ -1916,6 +2670,7 @@ function ProfileView({ user, onUpdate }: { user: UserType; onUpdate: () => void 
   const [profile, setProfile] = useState<any>(null);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
+  const [uploading, setUploading] = useState(false);
   const [activeTab, setActiveTab] = useState<'personal' | 'professional' | 'links'>('personal');
 
   useEffect(() => {
@@ -1927,6 +2682,38 @@ function ProfileView({ user, onUpdate }: { user: UserType; onUpdate: () => void 
     const data = await res.json();
     setProfile(data || {});
     setLoading(false);
+  };
+
+  const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    setUploading(true);
+    const formData = new FormData();
+    formData.append('file', file);
+
+    try {
+      const res = await fetch('/api/upload', {
+        method: 'POST',
+        body: formData,
+      });
+      if (res.ok) {
+        const { url } = await res.json();
+        const updatedProfile = { ...profile, profile_picture_url: url };
+        setProfile(updatedProfile);
+        
+        // Save immediately to ensure persistence
+        await fetch('/api/profile', {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(updatedProfile),
+        });
+      }
+    } catch (err) {
+      alert('Failed to upload image');
+    } finally {
+      setUploading(false);
+    }
   };
 
   const handleSave = async (e: React.FormEvent) => {
@@ -1973,6 +2760,31 @@ function ProfileView({ user, onUpdate }: { user: UserType; onUpdate: () => void 
           <div className="p-8 space-y-8">
             {activeTab === 'personal' && (
               <div className="space-y-6 animate-in fade-in slide-in-from-bottom-2 duration-300">
+                <div className="flex items-center gap-6">
+                  <div className="relative group">
+                    <div className="w-24 h-24 rounded-2xl bg-zinc-100 border-2 border-zinc-200 overflow-hidden flex items-center justify-center">
+                      {profile?.profile_picture_url ? (
+                        <img src={profile.profile_picture_url} alt="Profile" className="w-full h-full object-cover" referrerPolicy="no-referrer" />
+                      ) : (
+                        <User size={32} className="text-zinc-300" />
+                      )}
+                      {uploading && (
+                        <div className="absolute inset-0 bg-black/40 flex items-center justify-center">
+                          <Loader2 className="animate-spin text-white" size={20} />
+                        </div>
+                      )}
+                    </div>
+                    <label className="absolute -bottom-2 -right-2 p-2 bg-white border border-zinc-200 rounded-lg shadow-sm cursor-pointer hover:bg-zinc-50 transition-colors">
+                      <Camera size={14} />
+                      <input type="file" className="hidden" accept="image/*" onChange={handleFileUpload} disabled={uploading} />
+                    </label>
+                  </div>
+                  <div className="flex-1">
+                    <h4 className="font-bold text-lg">{user.role === 'STUDENT' ? (profile?.name || 'Your Name') : (profile?.company_name || 'Your Company')}</h4>
+                    <p className="text-sm text-zinc-500">{user.email}</p>
+                  </div>
+                </div>
+
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
                   <div className="space-y-1">
                     <label className="text-xs font-bold text-zinc-500 uppercase flex items-center gap-2">
@@ -1984,6 +2796,19 @@ function ProfileView({ user, onUpdate }: { user: UserType; onUpdate: () => void 
                       onChange={e => setProfile({ ...profile, [user.role === 'STUDENT' ? 'name' : 'company_name']: e.target.value })} 
                     />
                   </div>
+                  {user.role === 'STUDENT' && (
+                    <div className="space-y-1">
+                      <label className="text-xs font-bold text-zinc-500 uppercase flex items-center gap-2">
+                        <FileText size={14} />
+                        Headline
+                      </label>
+                      <Input 
+                        placeholder="e.g. Frontend Developer | React Enthusiast"
+                        value={profile?.headline || ''} 
+                        onChange={e => setProfile({ ...profile, headline: e.target.value })} 
+                      />
+                    </div>
+                  )}
                   <div className="space-y-1">
                     <label className="text-xs font-bold text-zinc-500 uppercase flex items-center gap-2">
                       <MapPin size={14} />
@@ -1993,6 +2818,27 @@ function ProfileView({ user, onUpdate }: { user: UserType; onUpdate: () => void 
                       placeholder="e.g. San Francisco, CA"
                       value={profile?.location || ''} 
                       onChange={e => setProfile({ ...profile, location: e.target.value })} 
+                    />
+                  </div>
+                  <div className="space-y-1">
+                    <label className="text-xs font-bold text-zinc-500 uppercase flex items-center gap-2">
+                      <Mail size={14} />
+                      Email Address
+                    </label>
+                    <Input 
+                      disabled
+                      value={user.email} 
+                    />
+                  </div>
+                  <div className="space-y-1">
+                    <label className="text-xs font-bold text-zinc-500 uppercase flex items-center gap-2">
+                      <Phone size={14} />
+                      Phone Number
+                    </label>
+                    <Input 
+                      placeholder="+1 (555) 000-0000"
+                      value={profile?.phone || ''} 
+                      onChange={e => setProfile({ ...profile, phone: e.target.value })} 
                     />
                   </div>
                 </div>
@@ -2016,21 +2862,65 @@ function ProfileView({ user, onUpdate }: { user: UserType; onUpdate: () => void 
                 {user.role === 'STUDENT' ? (
                   <>
                     <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                      <div className="space-y-1 md:col-span-2">
+                        <label className="text-xs font-bold text-zinc-500 uppercase flex items-center gap-2">
+                          <Building2 size={14} />
+                          College Name
+                        </label>
+                        <Input 
+                          placeholder="e.g. Stanford University"
+                          value={profile?.college_name || ''} 
+                          onChange={e => setProfile({ ...profile, college_name: e.target.value })} 
+                        />
+                      </div>
                       <div className="space-y-1">
                         <label className="text-xs font-bold text-zinc-500 uppercase flex items-center gap-2">
                           <GraduationCap size={14} />
-                          Education
+                          Degree
                         </label>
                         <Input 
-                          placeholder="e.g. BS Computer Science, Stanford"
-                          value={profile?.education || ''} 
-                          onChange={e => setProfile({ ...profile, education: e.target.value })} 
+                          placeholder="e.g. B.Tech, BS, MS"
+                          value={profile?.degree || ''} 
+                          onChange={e => setProfile({ ...profile, degree: e.target.value })} 
                         />
                       </div>
                       <div className="space-y-1">
                         <label className="text-xs font-bold text-zinc-500 uppercase flex items-center gap-2">
                           <Briefcase size={14} />
-                          Years of Experience
+                          Branch
+                        </label>
+                        <Input 
+                          placeholder="e.g. Computer Science, IT"
+                          value={profile?.branch || ''} 
+                          onChange={e => setProfile({ ...profile, branch: e.target.value })} 
+                        />
+                      </div>
+                      <div className="space-y-1">
+                        <label className="text-xs font-bold text-zinc-500 uppercase flex items-center gap-2">
+                          <Calendar size={14} />
+                          Graduation Year
+                        </label>
+                        <Input 
+                          placeholder="e.g. 2025"
+                          value={profile?.graduation_year || ''} 
+                          onChange={e => setProfile({ ...profile, graduation_year: e.target.value })} 
+                        />
+                      </div>
+                      <div className="space-y-1">
+                        <label className="text-xs font-bold text-zinc-500 uppercase flex items-center gap-2">
+                          <Star size={14} />
+                          CGPA / Percentage
+                        </label>
+                        <Input 
+                          placeholder="e.g. 9.0 or 85%"
+                          value={profile?.cgpa || ''} 
+                          onChange={e => setProfile({ ...profile, cgpa: e.target.value })} 
+                        />
+                      </div>
+                      <div className="space-y-1 md:col-span-2">
+                        <label className="text-xs font-bold text-zinc-500 uppercase flex items-center gap-2">
+                          <Briefcase size={14} />
+                          Total Years of Experience
                         </label>
                         <Input 
                           type="number"
@@ -2279,6 +3169,573 @@ function AdminView() {
           </tbody>
         </table>
       </Card>
+    </div>
+  );
+}
+
+// --- Network View ---
+
+function NetworkView({ user, setToast }: { user: UserType; setToast: (toast: any) => void }) {
+  const [searchQuery, setSearchQuery] = useState('');
+  const [searchResults, setSearchResults] = useState<UserType[]>([]);
+  const [friends, setFriends] = useState<Friendship[]>([]);
+  const [requests, setRequests] = useState<FriendRequest[]>([]);
+  const [loading, setLoading] = useState(false);
+  const [sendingRequestId, setSendingRequestId] = useState<string | number | null>(null);
+  const [selectedUser, setSelectedUser] = useState<any>(null);
+  const [chatFriend, setChatFriend] = useState<any>(null);
+
+  useEffect(() => {
+    fetchFriends();
+    fetchRequests();
+  }, []);
+
+  const fetchFriends = async () => {
+    const res = await fetch('/api/social/friends');
+    if (res.ok) setFriends(await res.json());
+  };
+
+  const fetchRequests = async () => {
+    const res = await fetch('/api/social/friend-requests');
+    if (res.ok) setRequests(await res.json());
+  };
+
+  const handleSearch = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!searchQuery.trim()) return;
+    setLoading(true);
+    try {
+      const res = await fetch(`/api/social/users/search?q=${encodeURIComponent(searchQuery)}`);
+      if (res.ok) setSearchResults(await res.json());
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const sendFriendRequest = async (receiverId: string | number) => {
+    setSendingRequestId(receiverId);
+    try {
+      const res = await fetch('/api/social/friend-request', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ receiverId }),
+      });
+      
+      const data = await res.json();
+      
+      if (res.ok) {
+        setToast({
+          title: 'Request Sent',
+          content: 'Your friend request has been sent successfully.',
+        });
+      } else {
+        setToast({
+          title: 'Request Failed',
+          content: data.error || 'Failed to send friend request.',
+        });
+      }
+    } catch (error) {
+      setToast({
+        title: 'Error',
+        content: 'A network error occurred. Please try again.',
+      });
+    } finally {
+      setSendingRequestId(null);
+    }
+  };
+
+  const respondToRequest = async (id: string | number, action: 'ACCEPT' | 'REJECT') => {
+    try {
+      const res = await fetch(`/api/social/friend-request/${id}/respond`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action }),
+      });
+      
+      if (res.ok) {
+        setToast({
+          title: action === 'ACCEPT' ? 'Request Accepted' : 'Request Rejected',
+          content: action === 'ACCEPT' ? 'You are now friends!' : 'The request has been removed.',
+        });
+        fetchRequests();
+        fetchFriends();
+        if (searchQuery) {
+          fetch(`/api/social/users/search?q=${encodeURIComponent(searchQuery)}`)
+            .then(r => r.ok ? r.json() : [])
+            .then(data => setSearchResults(data));
+        }
+      } else {
+        const data = await res.json();
+        setToast({
+          title: 'Error',
+          content: data.error || 'Failed to respond to request.',
+        });
+      }
+    } catch (error) {
+      setToast({
+        title: 'Error',
+        content: 'A network error occurred.',
+      });
+    }
+  };
+
+  const viewUserProfile = async (userId: string) => {
+    const res = await fetch(`/api/social/users/${userId}`);
+    if (res.ok) setSelectedUser(await res.json());
+  };
+
+  return (
+    <div className="space-y-8">
+      <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
+        <div>
+          <h2 className="text-2xl font-bold">Your Network</h2>
+          <p className="text-zinc-500 text-sm">Connect with other students and recruiters.</p>
+        </div>
+        <form onSubmit={handleSearch} className="relative w-full md:w-96">
+          <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-zinc-400" size={18} />
+          <Input 
+            placeholder="Search by username, name or email..." 
+            className="pl-10 pr-20"
+            value={searchQuery}
+            onChange={e => setSearchQuery(e.target.value)}
+          />
+          <Button type="submit" size="sm" className="absolute right-1.5 top-1.5 h-7 px-3 text-[10px]" disabled={loading}>
+            {loading ? <Loader2 className="animate-spin" size={14} /> : 'Search'}
+          </Button>
+        </form>
+      </div>
+
+      <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
+        {/* Left Column: Friends & Requests */}
+        <div className="lg:col-span-2 space-y-8">
+          {requests.length > 0 && (
+            <section>
+              <h3 className="text-sm font-bold text-zinc-400 uppercase tracking-widest mb-4">Pending Requests ({requests.length})</h3>
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                {requests.map(req => (
+                  <Card key={req.id} className="p-4 flex items-center justify-between bg-zinc-50/50 border-zinc-200">
+                    <div className="flex items-center gap-3">
+                      <div className="w-10 h-10 bg-zinc-200 rounded-full overflow-hidden flex-shrink-0">
+                        {req.sender_avatar ? (
+                          <img src={req.sender_avatar} alt={req.sender_name} className="w-full h-full object-cover" referrerPolicy="no-referrer" />
+                        ) : (
+                          <div className="w-full h-full flex items-center justify-center text-zinc-500 font-bold">
+                            {req.sender_username?.[0].toUpperCase()}
+                          </div>
+                        )}
+                      </div>
+                      <div>
+                        <p className="text-sm font-bold">{req.sender_name || req.sender_username}</p>
+                        <p className="text-xs text-zinc-500">@{req.sender_username}</p>
+                      </div>
+                    </div>
+                    <div className="flex gap-2">
+                      <button onClick={() => respondToRequest(req.id, 'ACCEPT')} className="p-2 bg-emerald-500 text-white rounded-lg hover:bg-emerald-600 transition-colors">
+                        <CheckCircle size={18} />
+                      </button>
+                      <button onClick={() => respondToRequest(req.id, 'REJECT')} className="p-2 bg-zinc-200 text-zinc-600 rounded-lg hover:bg-zinc-300 transition-colors">
+                        <XCircle size={18} />
+                      </button>
+                    </div>
+                  </Card>
+                ))}
+              </div>
+            </section>
+          )}
+
+          <section>
+            <h3 className="text-sm font-bold text-zinc-400 uppercase tracking-widest mb-4">Friends ({friends.length})</h3>
+            {friends.length > 0 ? (
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                {friends.map(friend => (
+                  <Card key={friend.id} className="p-4 flex items-center justify-between hover:shadow-md transition-all cursor-pointer" onClick={() => viewUserProfile(friend.friend_id)}>
+                    <div className="flex items-center gap-3">
+                      <div className="w-12 h-12 bg-zinc-100 rounded-full overflow-hidden flex-shrink-0">
+                        {friend.friend_avatar ? (
+                          <img src={friend.friend_avatar} alt={friend.friend_name} className="w-full h-full object-cover" referrerPolicy="no-referrer" />
+                        ) : (
+                          <div className="w-full h-full flex items-center justify-center text-zinc-400">
+                            <User size={24} />
+                          </div>
+                        )}
+                      </div>
+                      <div>
+                        <p className="font-bold">{friend.friend_name || friend.friend_username}</p>
+                        <div className="flex items-center gap-2">
+                          <span className="text-xs text-zinc-500">@{friend.friend_username}</span>
+                          <Badge variant="info" className="text-[8px] px-1.5 py-0 h-4">{friend.friend_role}</Badge>
+                        </div>
+                      </div>
+                    </div>
+                    <div className="flex gap-2">
+                      <button 
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          setChatFriend(friend);
+                        }}
+                        className="p-2 bg-zinc-100 text-zinc-600 rounded-lg hover:bg-zinc-200 transition-colors"
+                        title="Chat"
+                      >
+                        <MessageSquare size={18} />
+                      </button>
+                      <ChevronRight className="text-zinc-300" size={20} />
+                    </div>
+                  </Card>
+                ))}
+              </div>
+            ) : (
+              <div className="text-center py-12 bg-zinc-50 rounded-2xl border border-dashed border-zinc-200">
+                <Users className="mx-auto text-zinc-300 mb-3" size={40} />
+                <p className="text-zinc-500">You haven't made any friends yet.</p>
+                <p className="text-xs text-zinc-400 mt-1">Search for users to expand your network.</p>
+              </div>
+            )}
+          </section>
+        </div>
+
+        {/* Right Column: Search Results */}
+        <div className="space-y-6">
+          <h3 className="text-sm font-bold text-zinc-400 uppercase tracking-widest">Search Results</h3>
+          {searchResults.length > 0 ? (
+            <div className="space-y-3">
+              {searchResults.map(result => (
+                <Card key={result.id} className="p-3 flex items-center justify-between border-zinc-100">
+                  <div className="flex items-center gap-3 cursor-pointer" onClick={() => viewUserProfile(result.id)}>
+                    <div className="w-10 h-10 bg-zinc-100 rounded-full overflow-hidden flex-shrink-0">
+                      {result.profile_picture_url ? (
+                        <img src={result.profile_picture_url} alt={result.name} className="w-full h-full object-cover" referrerPolicy="no-referrer" />
+                      ) : (
+                        <div className="w-full h-full flex items-center justify-center text-zinc-400">
+                          <User size={20} />
+                        </div>
+                      )}
+                    </div>
+                    <div className="min-w-0">
+                      <p className="text-sm font-bold truncate">{result.name || result.username}</p>
+                      <p className="text-[10px] text-zinc-500 truncate">@{result.username}</p>
+                    </div>
+                  </div>
+                  {result.id.toString() !== user.id.toString() && !result.is_friend && !result.has_sent_request && (
+                    <button 
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        sendFriendRequest(result.id);
+                      }}
+                      disabled={sendingRequestId === result.id}
+                      className="p-1.5 bg-black text-white rounded-lg hover:bg-zinc-800 transition-colors disabled:opacity-50"
+                      title="Send Friend Request"
+                    >
+                      {sendingRequestId === result.id ? (
+                        <Loader2 size={16} className="animate-spin" />
+                      ) : (
+                        <Plus size={16} />
+                      )}
+                    </button>
+                  )}
+                  {result.has_sent_request && !result.is_friend && (
+                    <Badge variant="warning" className="text-[10px]">Pending</Badge>
+                  )}
+                  {result.is_friend && (
+                    <div className="flex items-center gap-2">
+                      <Badge variant="success" className="text-[10px]">Friend</Badge>
+                      <button 
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          setChatFriend({
+                            friend_id: result.id,
+                            friend_username: result.username,
+                            friend_name: result.name,
+                            friend_avatar: result.profile_picture_url
+                          });
+                        }}
+                        className="p-1.5 bg-zinc-100 text-zinc-600 rounded-lg hover:bg-zinc-200 transition-colors"
+                        title="Chat"
+                      >
+                        <MessageSquare size={16} />
+                      </button>
+                    </div>
+                  )}
+                </Card>
+              ))}
+            </div>
+          ) : searchQuery ? (
+            <p className="text-center py-8 text-zinc-400 text-sm italic">No users found matching "{searchQuery}"</p>
+          ) : (
+            <p className="text-center py-8 text-zinc-400 text-sm italic">Search for users above</p>
+          )}
+        </div>
+      </div>
+
+      {/* Chat Modal */}
+      <AnimatePresence>
+        {chatFriend && (
+          <FriendChatModal 
+            isOpen={!!chatFriend} 
+            onClose={() => setChatFriend(null)} 
+            friend={chatFriend} 
+            currentUser={user} 
+          />
+        )}
+      </AnimatePresence>
+
+      {/* User Profile Modal */}
+      <AnimatePresence>
+        {selectedUser && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
+            <motion.div 
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
+              className="absolute inset-0 bg-black/60 backdrop-blur-sm"
+              onClick={() => setSelectedUser(null)}
+            />
+            <motion.div 
+              initial={{ opacity: 0, scale: 0.95, y: 20 }}
+              animate={{ opacity: 1, scale: 1, y: 0 }}
+              exit={{ opacity: 0, scale: 0.95, y: 20 }}
+              className="relative w-full max-w-2xl bg-white rounded-3xl shadow-2xl overflow-hidden max-h-[90vh] overflow-y-auto"
+            >
+              <button onClick={() => setSelectedUser(null)} className="absolute top-4 right-4 p-2 bg-white/10 hover:bg-black/5 rounded-full transition-all z-10">
+                <X size={20} />
+              </button>
+
+              <div className="h-32 bg-gradient-to-r from-zinc-900 to-zinc-700" />
+              <div className="px-8 pb-8">
+                <div className="relative -mt-16 mb-6 flex items-end justify-between">
+                  <div className="w-32 h-32 bg-white p-1 rounded-3xl shadow-xl">
+                    <div className="w-full h-full bg-zinc-100 rounded-[22px] overflow-hidden">
+                      {selectedUser.profile?.profile_picture_url ? (
+                        <img src={selectedUser.profile.profile_picture_url} alt={selectedUser.profile.name} className="w-full h-full object-cover" referrerPolicy="no-referrer" />
+                      ) : (
+                        <div className="w-full h-full flex items-center justify-center text-zinc-300">
+                          <User size={64} />
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                  <div className="flex gap-2">
+                    {selectedUser.id.toString() !== user.id.toString() && !selectedUser.is_friend && !selectedUser.has_sent_request && (
+                      <Button 
+                        onClick={() => sendFriendRequest(selectedUser.id)}
+                        disabled={sendingRequestId === selectedUser.id}
+                      >
+                        {sendingRequestId === selectedUser.id ? (
+                          <Loader2 size={18} className="animate-spin mr-2" />
+                        ) : null}
+                        Connect
+                      </Button>
+                    )}
+                    {selectedUser.has_sent_request && !selectedUser.is_friend && (
+                      <Badge variant="warning">Request Pending</Badge>
+                    )}
+                    {selectedUser.is_friend && (
+                      <Button 
+                        variant="neutral"
+                        onClick={() => {
+                          setChatFriend({
+                            friend_id: selectedUser.id,
+                            friend_username: selectedUser.username,
+                            friend_name: selectedUser.profile?.name,
+                            friend_avatar: selectedUser.profile?.profile_picture_url
+                          });
+                          setSelectedUser(null);
+                        }}
+                      >
+                        <MessageSquare size={18} className="mr-2" />
+                        Chat
+                      </Button>
+                    )}
+                  </div>
+                </div>
+
+                <div className="space-y-6">
+                  <div>
+                    <h2 className="text-3xl font-bold tracking-tight">{selectedUser.profile?.name || selectedUser.username}</h2>
+                    <div className="flex items-center gap-3 mt-1">
+                      <span className="text-zinc-500 font-medium">@{selectedUser.username}</span>
+                      <Badge variant="info">{selectedUser.role}</Badge>
+                    </div>
+                  </div>
+
+                  {selectedUser.profile?.bio && (
+                    <div>
+                      <h4 className="text-xs font-bold text-zinc-400 uppercase tracking-widest mb-2">About</h4>
+                      <p className="text-zinc-600 leading-relaxed">{selectedUser.profile.bio}</p>
+                    </div>
+                  )}
+
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                    {selectedUser.profile?.location && (
+                      <div className="flex items-center gap-3 text-zinc-600">
+                        <MapPin size={18} className="text-zinc-400" />
+                        <span>{selectedUser.profile.location}</span>
+                      </div>
+                    )}
+                    {selectedUser.role === 'STUDENT' && selectedUser.profile?.education && (
+                      <div className="flex items-center gap-3 text-zinc-600">
+                        <GraduationCap size={18} className="text-zinc-400" />
+                        <span>{selectedUser.profile.education}</span>
+                      </div>
+                    )}
+                    {selectedUser.role === 'RECRUITER' && selectedUser.profile?.company_name && (
+                      <div className="flex items-center gap-3 text-zinc-600">
+                        <Building2 size={18} className="text-zinc-400" />
+                        <span>{selectedUser.profile.company_name}</span>
+                      </div>
+                    )}
+                  </div>
+
+                  {selectedUser.role === 'STUDENT' && selectedUser.profile?.skills && (
+                    <div>
+                      <h4 className="text-xs font-bold text-zinc-400 uppercase tracking-widest mb-3">Skills</h4>
+                      <div className="flex flex-wrap gap-2">
+                        {selectedUser.profile.skills.map((skill: string) => (
+                          <Badge key={skill} variant="neutral" className="bg-zinc-50">{skill}</Badge>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+                </div>
+              </div>
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
+    </div>
+  );
+}
+
+function FriendChatModal({ isOpen, onClose, friend, currentUser }: { isOpen: boolean; onClose: () => void; friend: any; currentUser: UserType }) {
+  const [messages, setMessages] = useState<any[]>([]);
+  const [newMessage, setNewMessage] = useState('');
+  const [loading, setLoading] = useState(false);
+  const scrollRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (isOpen && friend) {
+      fetchMessages();
+      const interval = setInterval(fetchMessages, 3000);
+      return () => clearInterval(interval);
+    }
+  }, [isOpen, friend]);
+
+  useEffect(() => {
+    if (scrollRef.current) {
+      scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
+    }
+  }, [messages]);
+
+  const fetchMessages = async () => {
+    if (!friend) return;
+    try {
+      const res = await fetch(`/api/chat/messages/${friend.friend_id}`);
+      if (res.ok) {
+        const data = await res.json();
+        setMessages(data);
+      }
+    } catch (err) {
+      console.error('Failed to fetch messages:', err);
+    }
+  };
+
+  const sendMessage = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!newMessage.trim() || loading || !friend) return;
+
+    setLoading(true);
+    try {
+      const res = await fetch('/api/chat/messages', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ receiverId: friend.friend_id, content: newMessage }),
+      });
+      if (res.ok) {
+        setNewMessage('');
+        fetchMessages();
+      }
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  if (!isOpen || !friend) return null;
+
+  return (
+    <div className="fixed inset-0 z-[60] flex items-center justify-center p-4">
+      <motion.div 
+        initial={{ opacity: 0 }}
+        animate={{ opacity: 1 }}
+        exit={{ opacity: 0 }}
+        className="absolute inset-0 bg-black/60 backdrop-blur-sm"
+        onClick={onClose}
+      />
+      <motion.div 
+        initial={{ opacity: 0, scale: 0.95, y: 20 }}
+        animate={{ opacity: 1, scale: 1, y: 0 }}
+        exit={{ opacity: 0, scale: 0.95, y: 20 }}
+        className="relative w-full max-w-lg bg-white rounded-3xl shadow-2xl overflow-hidden flex flex-col h-[600px]"
+      >
+        <div className="p-4 border-b flex items-center justify-between bg-zinc-50">
+          <div className="flex items-center gap-3">
+            <div className="w-10 h-10 bg-zinc-200 rounded-full overflow-hidden">
+              {friend.friend_avatar ? (
+                <img src={friend.friend_avatar} alt={friend.friend_name} className="w-full h-full object-cover" referrerPolicy="no-referrer" />
+              ) : (
+                <div className="w-full h-full flex items-center justify-center text-zinc-500">
+                  <User size={20} />
+                </div>
+              )}
+            </div>
+            <div>
+              <p className="font-bold text-sm">{friend.friend_name || friend.friend_username}</p>
+              <p className="text-[10px] text-zinc-500">@{friend.friend_username}</p>
+            </div>
+          </div>
+          <button onClick={onClose} className="p-2 hover:bg-zinc-200 rounded-full transition-all">
+            <X size={20} />
+          </button>
+        </div>
+
+        <div ref={scrollRef} className="flex-1 overflow-y-auto p-4 space-y-4 bg-zinc-50/30">
+          {messages.map((msg) => (
+            <div 
+              key={msg.id} 
+              className={`flex ${msg.sender_id.toString() === currentUser.id.toString() ? 'justify-end' : 'justify-start'}`}
+            >
+              <div 
+                className={`max-w-[80%] p-3 rounded-2xl text-sm ${
+                  msg.sender_id.toString() === currentUser.id.toString() 
+                    ? 'bg-black text-white rounded-tr-none' 
+                    : 'bg-white border text-zinc-800 rounded-tl-none'
+                }`}
+              >
+                {msg.content}
+                <p className={`text-[8px] mt-1 opacity-50 ${msg.sender_id.toString() === currentUser.id.toString() ? 'text-right' : 'text-left'}`}>
+                  {new Date(msg.created_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                </p>
+              </div>
+            </div>
+          ))}
+          {messages.length === 0 && (
+            <div className="h-full flex flex-col items-center justify-center text-zinc-400">
+              <MessageSquare size={40} className="mb-2 opacity-20" />
+              <p className="text-xs">No messages yet. Say hi!</p>
+            </div>
+          )}
+        </div>
+
+        <form onSubmit={sendMessage} className="p-4 border-t bg-white flex gap-2">
+          <Input 
+            value={newMessage}
+            onChange={(e) => setNewMessage(e.target.value)}
+            placeholder="Type a message..."
+            className="flex-1"
+          />
+          <Button type="submit" disabled={!newMessage.trim() || loading}>
+            {loading ? <Loader2 size={18} className="animate-spin" /> : <Send size={18} />}
+          </Button>
+        </form>
+      </motion.div>
     </div>
   );
 }

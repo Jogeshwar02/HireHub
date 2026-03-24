@@ -3,17 +3,64 @@ export type Role = 'STUDENT' | 'RECRUITER' | 'ADMIN';
 export interface User {
   id: string;
   email: string;
+  username?: string;
   role: Role;
   name?: string;
+  profile_picture_url?: string;
+}
+
+export interface FriendRequest {
+  id: string;
+  sender_id: string;
+  receiver_id: string;
+  status: 'PENDING' | 'ACCEPTED' | 'REJECTED';
+  created_at: string;
+  sender_name?: string;
+  sender_username?: string;
+  sender_avatar?: string;
+}
+
+export interface Friendship {
+  id: string;
+  user_id1: string;
+  user_id2: string;
+  friend_id: string;
+  created_at: string;
+  friend_name?: string;
+  friend_username?: string;
+  friend_avatar?: string;
+  friend_role?: Role;
+}
+
+export interface DirectMessage {
+  id: string;
+  sender_id: string;
+  receiver_id: string;
+  content: string;
+  is_read: number;
+  created_at: string;
 }
 
 export interface StudentProfile {
   user_id: string;
   name: string;
+  headline?: string;
   education: string;
+  college_name?: string;
+  degree?: string;
+  branch?: string;
+  graduation_year?: string;
+  cgpa?: string;
   bio: string;
   skills: string[];
   location?: string;
+  phone?: string;
+  email?: string;
+  profile_picture_url?: string;
+  linkedin_url?: string;
+  github_url?: string;
+  portfolio_url?: string;
+  experience_years?: number;
 }
 
 export interface RecruiterProfile {
@@ -22,6 +69,12 @@ export interface RecruiterProfile {
   company_bio: string;
   is_verified: boolean;
   location?: string;
+  phone?: string;
+  email?: string;
+  profile_picture_url?: string;
+  company_website?: string;
+  industry?: string;
+  company_size?: string;
 }
 
 export interface Job {
@@ -36,6 +89,7 @@ export interface Job {
   matchPercentage?: number;
   location?: string;
   work_type?: 'ON_SITE' | 'REMOTE' | 'HYBRID';
+  is_applied?: boolean;
 }
 
 export interface Application {
