@@ -558,10 +558,12 @@ function AuthPage({ onAuth, mode, setMode }: { onAuth: (isSignup?: boolean) => v
       if (res.ok) {
         onAuth(mode === 'register');
       } else {
-        setError(data.error);
+        const message = data?.error || data?.message || `Server error (${res.status})`;
+        setError(message);
       }
-    } catch (err) {
-      setError('Something went wrong');
+    } catch (err: any) {
+      console.error('Auth submission error', err);
+      setError(err?.message || 'Something went wrong');
     } finally {
       setLoading(false);
     }
