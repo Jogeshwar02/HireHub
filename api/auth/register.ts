@@ -2,7 +2,7 @@ import type { VercelRequest, VercelResponse } from '@vercel/node';
 import Database from 'better-sqlite3';
 import bcrypt from 'bcryptjs';
 import jwt from 'jsonwebtoken';
-import { getFirebase } from '../../../firebaseAdmin.js';
+import { getFirebase } from '../../firebaseAdmin.js';
 
 const JWT_SECRET = process.env.JWT_SECRET || 'hirehub-super-secret-key';
 const THIRTY_DAYS = 30 * 24 * 60 * 60 * 1000;

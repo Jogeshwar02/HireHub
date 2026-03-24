@@ -554,7 +554,13 @@ function AuthPage({ onAuth, mode, setMode }: { onAuth: (isSignup?: boolean) => v
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(body),
       });
-      const data = await res.json();
+      const raw = await res.text();
+      let data: any = {};
+      try {
+        data = raw ? JSON.parse(raw) : {};
+      } catch {
+        data = { error: raw || `Server error (${res.status})` };
+      }
       if (res.ok) {
         onAuth(mode === 'register');
       } else {
