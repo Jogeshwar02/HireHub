@@ -467,8 +467,24 @@ async function createNotification(userId: string | number, type: string, title: 
   app.post('/api/auth/register', async (req, res) => {
     const { email, password, role, name, company_name, username } = req.body;
     const { db: firestore } = getFirebase();
-    
-    const finalUsername = username || email.split('@')[0] + Math.floor(Math.random() * 1000);
+
+    if (!email || !password || !role) {
+      return res.status(400).json({ error: 'Email, password and role are required' });
+    }
+
+    if (role !== 'STUDENT' && role !== 'RECRUITER') {
+      return res.status(400).json({ error: 'Invalid role' });
+    }
+
+    if (role === 'STUDENT' && !name) {
+      return res.status(400).json({ error: 'Full name is required for student signup' });
+    }
+
+    if (role === 'RECRUITER' && !company_name) {
+      return res.status(400).json({ error: 'Company name is required for recruiter signup' });
+    }
+
+    const finalUsername = username?.trim() || `${email.split('@')[0]}${Math.floor(Math.random() * 1000)}`;
 
     if (!firestore) {
       // Fallback to SQLite if Firebase is not configured
@@ -490,7 +506,11 @@ async function createNotification(userId: string | number, type: string, title: 
         res.cookie('token', token, { httpOnly: true, secure: true, sameSite: 'none', maxAge: THIRTY_DAYS });
         res.json({ user: { id: userId, email, role } });
       } catch (err: any) {
-        res.status(400).json({ error: err.message });
+        const errMsg = String(err?.message || err);
+        if (errMsg.includes('UNIQUE constraint failed') || errMsg.includes('already exists')) {
+          return res.status(400).json({ error: 'User already exists' });
+        }
+        res.status(500).json({ error: errMsg || 'Could not register user' });
       }
       return;
     }
