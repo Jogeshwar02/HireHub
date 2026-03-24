@@ -6,6 +6,7 @@ import { getFirebase } from '../../firebaseAdmin.js';
 
 const JWT_SECRET = process.env.JWT_SECRET || 'hirehub-super-secret-key';
 const THIRTY_DAYS = 30 * 24 * 60 * 60 * 1000;
+const IS_VERCEL = process.env.VERCEL === '1' || Boolean(process.env.VERCEL_URL);
 let sqliteDb: Database.Database | null = null;
 
 function getSqliteDb() {
@@ -58,6 +59,10 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       const token = jwt.sign({ id: doc.id, email, role: data.role }, JWT_SECRET, { expiresIn: '30d' });
       res.setHeader('Set-Cookie', `token=${token}; HttpOnly; Path=/; Max-Age=${THIRTY_DAYS / 1000}; Secure; SameSite=None`);
       return res.status(200).json({ user: { id: doc.id, email: data.email, role: data.role, username: data.username } });
+    }
+
+    if (IS_VERCEL) {
+      return res.status(500).json({ error: 'Firebase is not configured on this deployment' });
     }
 
     const db = getSqliteDb();
