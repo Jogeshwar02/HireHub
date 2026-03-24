@@ -13,6 +13,18 @@ function getSqliteDb() {
   try {
     const dbPath = process.env.SQLITE_DB_PATH || '/tmp/hirehub.db';
     sqliteDb = new Database(dbPath);
+
+    sqliteDb.exec(`
+CREATE TABLE IF NOT EXISTS users (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  email TEXT UNIQUE NOT NULL,
+  username TEXT UNIQUE NOT NULL,
+  password TEXT NOT NULL,
+  role TEXT CHECK(role IN ('STUDENT', 'RECRUITER', 'ADMIN')) NOT NULL,
+  created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+);
+`);
+
     return sqliteDb;
   } catch (err) {
     console.error('SQLite initialization error:', err);
