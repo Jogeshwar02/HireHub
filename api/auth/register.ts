@@ -7,6 +7,12 @@ import { getFirebase } from '../../firebaseAdmin.js';
 const JWT_SECRET = process.env.JWT_SECRET || 'hirehub-super-secret-key';
 const THIRTY_DAYS = 30 * 24 * 60 * 60 * 1000;
 const IS_VERCEL = process.env.VERCEL === '1' || Boolean(process.env.VERCEL_URL);
+
+const envPresence = () => ({
+  FIREBASE_PROJECT_ID: Boolean(process.env.FIREBASE_PROJECT_ID),
+  FIREBASE_CLIENT_EMAIL: Boolean(process.env.FIREBASE_CLIENT_EMAIL),
+  FIREBASE_PRIVATE_KEY: Boolean(process.env.FIREBASE_PRIVATE_KEY),
+});
 let sqliteDb: Database.Database | null = null;
 
 function getSqliteDb() {
@@ -150,7 +156,10 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     }
 
     if (IS_VERCEL) {
-      return res.status(500).json({ error: 'Firebase is not configured on this deployment' });
+      return res.status(500).json({
+        error: 'Firebase is not configured on this deployment',
+        envPresence: envPresence(),
+      });
     }
 
     // fallback sqlite
