@@ -14,11 +14,19 @@ export function getFirebase() {
       return { db: null, auth: null };
     }
 
+    const normalizedPrivateKey = privateKey
+      .trim()
+      .replace(/^"([\s\S]*)"$/, '$1')
+      .replace(/\\n/g, '\n')
+      .replace('-----BEGIN PRIVATE KEY-----', '-----BEGIN PRIVATE KEY-----\n')
+      .replace('-----END PRIVATE KEY-----', '\n-----END PRIVATE KEY-----')
+      .replace(/\n{2,}/g, '\n');
+
     admin.initializeApp({
       credential: admin.credential.cert({
         projectId,
         clientEmail,
-        privateKey: privateKey.replace(/\\n/g, '\n'),
+        privateKey: normalizedPrivateKey,
       }),
     });
   }
