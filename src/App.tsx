@@ -126,8 +126,7 @@ const safeParse = (data: any, fallback: any = []) => {
 export default function App() {
   const [user, setUser] = useState<UserType | null>(null);
   const [loading, setLoading] = useState(true);
-  const [view, setView] = useState<'dashboard' | 'jobs' | 'applications' | 'interviews' | 'profile' | 'admin' | 'network' | 'saved'>('dashboard');
-  const [isAnalyzerOpen, setIsAnalyzerOpen] = useState(false);
+  const [view, setView] = useState<'dashboard' | 'jobs' | 'applications' | 'interviews' | 'profile' | 'admin' | 'network'>('dashboard');
   const [authMode, setAuthMode] = useState<'login' | 'register'>('login');
   const [notifications, setNotifications] = useState<NotificationType[]>([]);
   const [showNotifications, setShowNotifications] = useState(false);
@@ -139,7 +138,6 @@ export default function App() {
   const [savedJobIds, setSavedJobIds] = useState<string[]>([]);
 
   useEffect(() => {
-    console.log('[App] Initial checkAuth call');
     checkAuth();
   }, []);
 
@@ -165,24 +163,28 @@ export default function App() {
       const res = await fetch('/api/notifications');
       if (res.ok) {
         const data = await res.json();
-        setNotifications(data);
-        
-        // Check for new notifications
-        const unread = data.filter((n: any) => !n.is_read);
-        if (unread.length > 0) {
-          const latestId = unread[0].id;
-          if (latestId !== lastNotificationIdRef.current) {
-            const latest = unread[0];
-            setToast({ title: latest.title, content: latest.content, link: latest.link });
-            setTimeout(() => setToast(null), 5000);
-            
-            // Browser notification
-            if ('Notification' in window && Notification.permission === 'granted') {
-              new Notification(latest.title, { body: latest.content });
+        if (Array.isArray(data)) {
+          setNotifications(data);
+          
+          // Check for new notifications
+          const unread = data.filter((n: any) => !n.is_read);
+          if (unread.length > 0) {
+            const latestId = unread[0].id;
+            if (latestId !== lastNotificationIdRef.current) {
+              const latest = unread[0];
+              setToast({ title: latest.title, content: latest.content, link: latest.link });
+              setTimeout(() => setToast(null), 5000);
+              
+              // Browser notification
+              if ('Notification' in window && Notification.permission === 'granted') {
+                new Notification(latest.title, { body: latest.content });
+              }
+              lastNotificationIdRef.current = latestId;
+              setLastNotificationId(latestId);
             }
-            lastNotificationIdRef.current = latestId;
-            setLastNotificationId(latestId);
           }
+        } else {
+          setNotifications([]);
         }
       }
     } catch (err) {
@@ -240,7 +242,6 @@ export default function App() {
     if (link.startsWith('/interviews')) setView('interviews');
     if (link.startsWith('/profile')) setView('profile');
     if (link.startsWith('/dashboard')) setView('dashboard');
-    if (link.startsWith('/analyzer')) setIsAnalyzerOpen(true);
     setShowNotifications(false);
   };
 
@@ -254,25 +255,19 @@ export default function App() {
   };
 
   const checkAuth = async (isSignup?: boolean) => {
-    console.log('[App] checkAuth started');
     try {
       const res = await fetch('/api/auth/me');
-      console.log('[App] checkAuth response status:', res.status);
       if (res.ok) {
         const data = await res.json();
-        console.log('[App] checkAuth success, user:', data.user?.email);
         setUser(data.user);
         if (isSignup) {
           setView('profile');
           setIsFirstTime(true);
         }
-      } else {
-        console.log('[App] checkAuth failed (unauthorized)');
       }
     } catch (err) {
-      console.error('[App] checkAuth error:', err);
+      console.error(err);
     } finally {
-      console.log('[App] checkAuth finished, setting loading to false');
       setLoading(false);
     }
   };
@@ -386,7 +381,7 @@ export default function App() {
             exit={{ opacity: 0, y: -10 }}
             transition={{ duration: 0.2 }}
           >
-            {view === 'dashboard' && <Dashboard user={user} setView={setView} onRefreshNotifications={fetchNotifications} />}
+            {view === 'dashboard' && <Dashboard user={user} setView={setView} onRefreshNotifications={fetchNotifications} setToast={setToast} />}
             {view === 'jobs' && <JobsView user={user} savedJobIds={savedJobIds} onToggleSave={toggleSave} />}
             {view === 'saved' && user.role === 'STUDENT' && (
               <SavedJobsView 
@@ -432,65 +427,6 @@ export default function App() {
         <MobileNavButton active={view === 'interviews'} onClick={() => setView('interviews')} icon={<Calendar size={20} />} label="Events" />
         <MobileNavButton active={view === 'profile'} onClick={() => setView('profile')} icon={<User size={20} />} label="Profile" />
       </nav>
-
-      {/* Floating Resume Analyzer Button */}
-      {user.role === 'STUDENT' && (
-        <div className="fixed bottom-24 md:bottom-8 right-6 z-40">
-          <motion.button
-            whileHover={{ scale: 1.1 }}
-            whileTap={{ scale: 0.9 }}
-            onClick={() => setIsAnalyzerOpen(true)}
-            className="w-14 h-14 bg-black text-white rounded-full shadow-lg flex items-center justify-center hover:bg-zinc-800 transition-colors group relative"
-          >
-            <Zap size={24} />
-            <span className="absolute right-full mr-3 px-2 py-1 bg-zinc-800 text-white text-xs rounded opacity-0 group-hover:opacity-100 transition-opacity whitespace-nowrap pointer-events-none">
-              Resume Analyzer
-            </span>
-          </motion.button>
-        </div>
-      )}
-
-      {/* Resume Analyzer Modal */}
-      <AnimatePresence>
-        {isAnalyzerOpen && (
-          <div className="fixed inset-0 z-[60] flex items-center justify-center p-4">
-            <motion.div
-              initial={{ opacity: 0 }}
-              animate={{ opacity: 1 }}
-              exit={{ opacity: 0 }}
-              onClick={() => setIsAnalyzerOpen(false)}
-              className="absolute inset-0 bg-black/40 backdrop-blur-sm"
-            />
-            <motion.div
-              initial={{ opacity: 0, scale: 0.95, y: 20 }}
-              animate={{ opacity: 1, scale: 1, y: 0 }}
-              exit={{ opacity: 0, scale: 0.95, y: 20 }}
-              className="relative w-full max-w-4xl max-h-[90vh] bg-white rounded-3xl shadow-2xl overflow-hidden flex flex-col"
-            >
-              <div className="p-6 border-b border-zinc-100 flex items-center justify-between shrink-0">
-                <div className="flex items-center gap-3">
-                  <div className="w-10 h-10 bg-black rounded-xl flex items-center justify-center text-white">
-                    <Zap size={20} />
-                  </div>
-                  <div>
-                    <h3 className="font-bold text-lg">Resume AI Analyzer</h3>
-                    <p className="text-xs text-zinc-500">Get professional feedback and ATS tips</p>
-                  </div>
-                </div>
-                <button 
-                  onClick={() => setIsAnalyzerOpen(false)}
-                  className="p-2 hover:bg-zinc-100 rounded-full transition-colors"
-                >
-                  <X size={20} />
-                </button>
-              </div>
-              <div className="flex-1 overflow-y-auto p-6">
-                <ResumeAnalyzer user={user} />
-              </div>
-            </motion.div>
-          </div>
-        )}
-      </AnimatePresence>
     </div>
   );
 }
@@ -554,22 +490,14 @@ function AuthPage({ onAuth, mode, setMode }: { onAuth: (isSignup?: boolean) => v
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(body),
       });
-      const raw = await res.text();
-      let data: any = {};
-      try {
-        data = raw ? JSON.parse(raw) : {};
-      } catch {
-        data = { error: raw || `Server error (${res.status})` };
-      }
+      const data = await res.json();
       if (res.ok) {
         onAuth(mode === 'register');
       } else {
-        const message = data?.error || data?.message || `Server error (${res.status})`;
-        setError(message);
+        setError(data.error);
       }
-    } catch (err: any) {
-      console.error('Auth submission error', err);
-      setError(err?.message || 'Something went wrong');
+    } catch (err) {
+      setError('Something went wrong');
     } finally {
       setLoading(false);
     }
@@ -707,322 +635,9 @@ function NotificationCenter({
   );
 }
 
-// --- Resume Analyzer ---
-
-function ResumeAnalyzer({ user }: { user: UserType }) {
-  const [file, setFile] = useState<File | null>(null);
-  const [loading, setLoading] = useState(false);
-  const [analysis, setAnalysis] = useState<any>(null);
-  const [error, setError] = useState<string | null>(null);
-  const [history, setHistory] = useState<any[]>([]);
-
-  useEffect(() => {
-    fetchHistory();
-  }, []);
-
-  const fetchHistory = async () => {
-    try {
-      const res = await fetch('/api/resume-analyses');
-      if (res.ok) {
-        const text = await res.text();
-        try {
-          setHistory(JSON.parse(text));
-        } catch (e) {
-          console.error('Failed to parse history JSON:', text);
-        }
-      }
-    } catch (err) {
-      console.error('Failed to fetch history:', err);
-    }
-  };
-
-  const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-    if (e.target.files && e.target.files[0]) {
-      setFile(e.target.files[0]);
-      setAnalysis(null);
-      setError(null);
-    }
-  };
-
-  const analyzeResume = async () => {
-    if (!file) return;
-    setLoading(true);
-    setError(null);
-
-    const safeJson = async (res: Response) => {
-      const text = await res.text();
-      try {
-        return JSON.parse(text);
-      } catch (e) {
-        return { error: text || 'Unknown server error' };
-      }
-    };
-
-    try {
-      // 1. Extract text from PDF via backend
-      const formData = new FormData();
-      formData.append('file', file);
-      const extractRes = await fetch('/api/extract-text', {
-        method: 'POST',
-        body: formData,
-      });
-
-      const extractData = await safeJson(extractRes);
-      if (!extractRes.ok) {
-        throw new Error(extractData.error || 'Failed to extract text from PDF');
-      }
-      const { text } = extractData;
-
-      // 2. Call server for analysis
-      const analysisRes = await fetch('/api/analyze-resume', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ text }),
-      });
-
-      const analysisData = await safeJson(analysisRes);
-      if (!analysisRes.ok) {
-        throw new Error(analysisData.error || 'Failed to analyze resume');
-      }
-
-      const result = analysisData;
-      setAnalysis(result);
-
-      // 3. Save analysis to backend
-      await fetch('/api/resume-analysis', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          resume_name: file.name,
-          score: result.score,
-          analysis_json: result
-        }),
-      });
-
-      fetchHistory();
-    } catch (err: any) {
-      console.error('Analysis error:', err);
-      setError(err.message || 'Failed to analyze resume');
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  return (
-    <div className="max-w-4xl mx-auto space-y-8">
-      <div className="flex items-center justify-between">
-        <div>
-          <h2 className="text-3xl font-bold tracking-tight">Resume AI Analyzer</h2>
-          <p className="text-zinc-500 mt-1">Get professional feedback and ATS optimization tips for your resume.</p>
-        </div>
-        <div className="w-12 h-12 bg-black rounded-2xl flex items-center justify-center text-white">
-          <Zap size={24} />
-        </div>
-      </div>
-
-      <Card className="p-8 border-dashed border-2 border-zinc-200 bg-zinc-50/50 text-center">
-        <div className="max-w-sm mx-auto space-y-4">
-          <div className="w-16 h-16 bg-white rounded-2xl shadow-sm mx-auto flex items-center justify-center text-zinc-400">
-            <FileText size={32} />
-          </div>
-          <div>
-            <h4 className="font-bold text-lg">Upload your Resume</h4>
-            <p className="text-sm text-zinc-500">PDF format recommended for best results.</p>
-          </div>
-          <div className="flex flex-col gap-4">
-            <input 
-              type="file" 
-              accept=".pdf" 
-              onChange={handleFileChange}
-              className="block w-full text-sm text-zinc-500 file:mr-4 file:py-2 file:px-4 file:rounded-full file:border-0 file:text-sm file:font-semibold file:bg-black file:text-white hover:file:bg-zinc-800 cursor-pointer"
-            />
-            <Button 
-              onClick={analyzeResume} 
-              disabled={!file || loading}
-              className="w-full"
-            >
-              {loading ? <Loader2 className="animate-spin mr-2" size={18} /> : <Zap className="mr-2" size={18} />}
-              {loading ? 'Analyzing...' : 'Analyze Resume'}
-            </Button>
-          </div>
-          {error && <p className="text-xs text-red-500 font-medium">{error}</p>}
-        </div>
-      </Card>
-
-      {analysis && (
-        <motion.div 
-          initial={{ opacity: 0, y: 20 }}
-          animate={{ opacity: 1, y: 0 }}
-          className="space-y-8"
-        >
-          {/* Score Card */}
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
-            <Card className="p-6 flex flex-col items-center justify-center text-center bg-black text-white border-none md:col-span-1">
-              <p className="text-xs font-bold text-zinc-400 uppercase tracking-widest mb-2">Resume Score</p>
-              <div className="relative w-32 h-32 flex items-center justify-center">
-                <svg className="w-full h-full transform -rotate-90">
-                  <circle
-                    cx="64"
-                    cy="64"
-                    r="58"
-                    stroke="currentColor"
-                    strokeWidth="8"
-                    fill="transparent"
-                    className="text-white/10"
-                  />
-                  <circle
-                    cx="64"
-                    cy="64"
-                    r="58"
-                    stroke="currentColor"
-                    strokeWidth="8"
-                    fill="transparent"
-                    strokeDasharray={364.4}
-                    strokeDashoffset={364.4 - (364.4 * (analysis.score || 0)) / 100}
-                    className="text-emerald-400 transition-all duration-1000"
-                  />
-                </svg>
-                <span className="absolute text-4xl font-bold">{analysis.score}</span>
-              </div>
-              <p className="mt-4 text-sm font-medium text-emerald-400">{analysis.overall_verdict}</p>
-            </Card>
-
-            <Card className="p-6 md:col-span-2 space-y-4">
-              <h3 className="font-bold text-lg flex items-center gap-2">
-                <TrendingUp size={20} className="text-emerald-500" />
-                Professional Summary
-              </h3>
-              <p className="text-zinc-600 leading-relaxed">{analysis.summary}</p>
-              <div className="grid grid-cols-2 gap-4 pt-4">
-                <div className="p-3 bg-emerald-50 rounded-xl border border-emerald-100">
-                  <p className="text-[10px] font-bold text-emerald-600 uppercase mb-1">Strengths</p>
-                  <p className="text-xl font-bold text-emerald-700">{analysis.strengths?.length || 0}</p>
-                </div>
-                <div className="p-3 bg-amber-50 rounded-xl border border-amber-100">
-                  <p className="text-[10px] font-bold text-amber-600 uppercase mb-1">Improvements</p>
-                  <p className="text-xl font-bold text-amber-700">{(analysis.weaknesses?.length || 0) + (analysis.missing_skills?.length || 0)}</p>
-                </div>
-              </div>
-            </Card>
-          </div>
-
-          {/* Detailed Feedback */}
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
-            <div className="space-y-6">
-              <section>
-                <h4 className="text-sm font-bold text-zinc-400 uppercase tracking-widest mb-4 flex items-center gap-2">
-                  <CheckCircle size={16} className="text-emerald-500" />
-                  Key Strengths
-                </h4>
-                <div className="space-y-2">
-                  {analysis.strengths?.map((s: string, i: number) => (
-                    <div key={i} className="flex items-start gap-3 p-3 bg-white border border-zinc-100 rounded-xl shadow-sm">
-                      <div className="w-5 h-5 bg-emerald-100 text-emerald-600 rounded-full flex items-center justify-center shrink-0 mt-0.5">
-                        <CheckCircle size={12} />
-                      </div>
-                      <p className="text-sm text-zinc-700">{s}</p>
-                    </div>
-                  ))}
-                </div>
-              </section>
-
-              <section>
-                <h4 className="text-sm font-bold text-zinc-400 uppercase tracking-widest mb-4 flex items-center gap-2">
-                  <XCircle size={16} className="text-red-500" />
-                  Weaknesses
-                </h4>
-                <div className="space-y-2">
-                  {analysis.weaknesses?.map((w: string, i: number) => (
-                    <div key={i} className="flex items-start gap-3 p-3 bg-white border border-zinc-100 rounded-xl shadow-sm">
-                      <div className="w-5 h-5 bg-red-100 text-red-600 rounded-full flex items-center justify-center shrink-0 mt-0.5">
-                        <XCircle size={12} />
-                      </div>
-                      <p className="text-sm text-zinc-700">{w}</p>
-                    </div>
-                  ))}
-                </div>
-              </section>
-            </div>
-
-            <div className="space-y-6">
-              <section>
-                <h4 className="text-sm font-bold text-zinc-400 uppercase tracking-widest mb-4 flex items-center gap-2">
-                  <Star size={16} className="text-amber-500" />
-                  Missing Skills
-                </h4>
-                <div className="flex flex-wrap gap-2">
-                  {analysis.missing_skills?.map((skill: string, i: number) => (
-                    <Badge key={i} variant="warning" className="px-3 py-1">{skill}</Badge>
-                  ))}
-                </div>
-              </section>
-
-              <section>
-                <h4 className="text-sm font-bold text-zinc-400 uppercase tracking-widest mb-4 flex items-center gap-2">
-                  <Search size={16} className="text-blue-500" />
-                  ATS Keywords to Add
-                </h4>
-                <div className="flex flex-wrap gap-2">
-                  {analysis.keywords_to_add?.map((kw: string, i: number) => (
-                    <Badge key={i} variant="info" className="px-3 py-1">{kw}</Badge>
-                  ))}
-                </div>
-              </section>
-
-              <section>
-                <h4 className="text-sm font-bold text-zinc-400 uppercase tracking-widest mb-4 flex items-center gap-2">
-                  <Filter size={16} className="text-indigo-500" />
-                  Formatting Tips
-                </h4>
-                <div className="space-y-2">
-                  {analysis.formatting_tips?.map((tip: string, i: number) => (
-                    <div key={i} className="p-3 bg-indigo-50/30 border border-indigo-100 rounded-xl text-sm text-indigo-900">
-                      {tip}
-                    </div>
-                  ))}
-                </div>
-              </section>
-            </div>
-          </div>
-        </motion.div>
-      )}
-
-      {/* History */}
-      {history.length > 0 && (
-        <section className="pt-8 border-t border-zinc-100">
-          <h3 className="text-lg font-bold mb-4">Analysis History</h3>
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-            {history.map((h) => (
-              <Card 
-                key={h.id} 
-                className="p-4 flex items-center justify-between cursor-pointer hover:border-zinc-300 transition-all bg-white"
-                onClick={() => setAnalysis(h.analysis_json)}
-              >
-                <div className="flex items-center gap-3">
-                  <div className="w-10 h-10 bg-zinc-100 rounded-lg flex items-center justify-center text-zinc-400">
-                    <FileText size={20} />
-                  </div>
-                  <div>
-                    <p className="text-sm font-bold truncate max-w-[150px]">{h.resume_name}</p>
-                    <p className="text-[10px] text-zinc-500 uppercase font-medium">{new Date(h.created_at).toLocaleDateString()}</p>
-                  </div>
-                </div>
-                <div className="text-right">
-                  <p className="text-lg font-bold">{h.score}</p>
-                  <p className="text-[8px] font-bold text-zinc-400 uppercase tracking-widest">Score</p>
-                </div>
-              </Card>
-            ))}
-          </div>
-        </section>
-      )}
-    </div>
-  );
-}
-
 // --- Dashboard ---
 
-function Dashboard({ user, setView, onRefreshNotifications }: { user: UserType; setView: (v: any) => void; onRefreshNotifications?: () => void }) {
+function Dashboard({ user, setView, onRefreshNotifications, setToast }: { user: UserType; setView: (v: any) => void; onRefreshNotifications?: () => void; setToast?: (toast: any) => void }) {
   const [stats, setStats] = useState<any>(null);
   const [recentJobs, setRecentJobs] = useState<Job[]>([]);
   const [recentApps, setRecentApps] = useState<Application[]>([]);
@@ -1041,18 +656,33 @@ function Dashboard({ user, setView, onRefreshNotifications }: { user: UserType; 
         fetch('/api/applications'),
         fetch('/api/interviews')
       ]);
+      
       const allJobs = await jobsRes.json();
-      const visibleJobs = user.role === 'RECRUITER' ? allJobs : allJobs.filter((j: Job) => j.status !== 'CLOSED');
-      setRecentJobs(visibleJobs.slice(0, 4));
-      setRecentApps((await appsRes.json()).slice(0, 4));
-      setRecentInterviews((await interviewsRes.json()).slice(0, 3));
+      if (Array.isArray(allJobs)) {
+        const visibleJobs = user.role === 'RECRUITER' ? allJobs : allJobs.filter((j: Job) => j.status !== 'CLOSED');
+        setRecentJobs(visibleJobs.slice(0, 4));
+      } else if (allJobs.error && allJobs.error.includes('quota')) {
+        setToast?.({ title: 'Quota Exceeded', content: 'Firestore quota has been exceeded. Please try again tomorrow.' });
+      }
+      
+      const appsData = await appsRes.json();
+      if (Array.isArray(appsData)) {
+        setRecentApps(appsData.slice(0, 4));
+      }
+      
+      const interviewsData = await interviewsRes.json();
+      if (Array.isArray(interviewsData)) {
+        setRecentInterviews(interviewsData.slice(0, 3));
+      }
 
       if (user.role === 'ADMIN') {
         const statsRes = await fetch('/api/admin/stats');
-        setStats(await statsRes.json());
+        const statsData = await statsRes.json();
+        if (!statsData.error) setStats(statsData);
       } else {
         const statsRes = await fetch('/api/dashboard/stats');
-        setStats(await statsRes.json());
+        const statsData = await statsRes.json();
+        if (!statsData.error) setStats(statsData);
       }
     } finally {
       setLoading(false);
@@ -1381,7 +1011,12 @@ function JobsView({ user, savedJobIds, onToggleSave }: { user: UserType, savedJo
     setLoading(true);
     try {
       const res = await fetch('/api/jobs');
-      setJobs(await res.json());
+      const data = await res.json();
+      if (Array.isArray(data)) {
+        setJobs(data);
+      } else {
+        setJobs([]);
+      }
     } finally {
       setLoading(false);
     }
@@ -1645,7 +1280,14 @@ function SavedJobsView({ user, onSelectJob, onToggleSave }: { user: UserType; on
     setLoading(true);
     try {
       const res = await fetch('/api/jobs/saved');
-      if (res.ok) setJobs(await res.json());
+      if (res.ok) {
+        const data = await res.json();
+        if (Array.isArray(data)) {
+          setJobs(data);
+        } else {
+          setJobs([]);
+        }
+      }
     } finally {
       setLoading(false);
     }
@@ -2254,7 +1896,12 @@ function InterviewsView({ user }: { user: UserType }) {
     setLoading(true);
     try {
       const res = await fetch('/api/interviews');
-      setInterviews(await res.json());
+      const data = await res.json();
+      if (Array.isArray(data)) {
+        setInterviews(data);
+      } else {
+        setInterviews([]);
+      }
     } finally {
       setLoading(false);
     }
@@ -2506,7 +2153,12 @@ function ApplicationsView({ user, viewParams }: { user: UserType; viewParams?: a
     setLoading(true);
     try {
       const res = await fetch('/api/applications');
-      setApps(await res.json());
+      const data = await res.json();
+      if (Array.isArray(data)) {
+        setApps(data);
+      } else {
+        setApps([]);
+      }
     } finally {
       setLoading(false);
     }
@@ -3087,7 +2739,15 @@ function RecommendedJobs({ user }: { user: UserType }) {
     fetch('/api/jobs')
       .then(res => res.json())
       .then(data => {
-        setJobs(data.sort((a: any, b: any) => (b.matchPercentage || 0) - (a.matchPercentage || 0)).slice(0, 3));
+        if (Array.isArray(data)) {
+          setJobs(data.sort((a: any, b: any) => (b.matchPercentage || 0) - (a.matchPercentage || 0)).slice(0, 3));
+        } else {
+          setJobs([]);
+        }
+        setLoading(false);
+      })
+      .catch(() => {
+        setJobs([]);
         setLoading(false);
       });
   }, []);
@@ -3124,8 +2784,14 @@ function AdminView() {
   }, []);
 
   const fetchRecruiters = async () => {
+    setLoading(true);
     const res = await fetch('/api/admin/recruiters');
-    setRecruiters(await res.json());
+    const data = await res.json();
+    if (Array.isArray(data)) {
+      setRecruiters(data);
+    } else {
+      setRecruiters([]);
+    }
     setLoading(false);
   };
 
@@ -3200,12 +2866,26 @@ function NetworkView({ user, setToast }: { user: UserType; setToast: (toast: any
 
   const fetchFriends = async () => {
     const res = await fetch('/api/social/friends');
-    if (res.ok) setFriends(await res.json());
+    if (res.ok) {
+      const data = await res.json();
+      if (Array.isArray(data)) {
+        setFriends(data);
+      } else {
+        setFriends([]);
+      }
+    }
   };
 
   const fetchRequests = async () => {
     const res = await fetch('/api/social/friend-requests');
-    if (res.ok) setRequests(await res.json());
+    if (res.ok) {
+      const data = await res.json();
+      if (Array.isArray(data)) {
+        setRequests(data);
+      } else {
+        setRequests([]);
+      }
+    }
   };
 
   const handleSearch = async (e: React.FormEvent) => {
@@ -3214,7 +2894,14 @@ function NetworkView({ user, setToast }: { user: UserType; setToast: (toast: any
     setLoading(true);
     try {
       const res = await fetch(`/api/social/users/search?q=${encodeURIComponent(searchQuery)}`);
-      if (res.ok) setSearchResults(await res.json());
+      if (res.ok) {
+        const data = await res.json();
+        if (Array.isArray(data)) {
+          setSearchResults(data);
+        } else {
+          setSearchResults([]);
+        }
+      }
     } finally {
       setLoading(false);
     }

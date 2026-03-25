@@ -9,37 +9,7 @@ import cookieParser from 'cookie-parser';
 import dotenv from 'dotenv';
 import multer from 'multer';
 import fs from 'fs';
-import { createRequire } from 'module';
-const require = createRequire(import.meta.url);
-let pdfParse: any;
-try {
-  const mod = require('pdf-parse');
-  if (typeof mod === 'function') {
-    pdfParse = mod;
-  } else if (mod && typeof mod.default === 'function') {
-    pdfParse = mod.default;
-  } else if (mod && typeof mod.pdf === 'function') {
-    pdfParse = mod.pdf;
-  } else {
-    pdfParse = mod;
-  }
-} catch (e) {
-  console.error('Failed to load pdf-parse:', e);
-}
-import { GoogleGenAI } from '@google/genai';
 import { getFirebase } from './firebaseAdmin.js';
-
-// Robust GoogleGenAI initialization
-let GoogleGenAIClass: any = GoogleGenAI;
-if (!GoogleGenAIClass || (typeof GoogleGenAIClass !== 'function' && (GoogleGenAIClass as any).GoogleGenAI)) {
-  GoogleGenAIClass = (GoogleGenAIClass as any).GoogleGenAI;
-}
-
-console.log('[Init] pdfParse function resolved. Type:', typeof pdfParse);
-console.log('[Init] GoogleGenAI resolved. Type:', typeof GoogleGenAIClass);
-
-// Test commit - deployment check
-console.log('[Init] Server starting with deployment verification');
 
 dotenv.config();
 
@@ -178,16 +148,6 @@ db.exec(`
     FOREIGN KEY(student_id) REFERENCES users(id)
   );
 
-  CREATE TABLE IF NOT EXISTS resume_analyses (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    user_id INTEGER NOT NULL,
-    resume_name TEXT,
-    score INTEGER,
-    analysis_json TEXT,
-    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-    FOREIGN KEY(user_id) REFERENCES users(id)
-  );
-
   CREATE TABLE IF NOT EXISTS user_skills (
     user_id INTEGER,
     skill TEXT,
@@ -272,6 +232,14 @@ const safeParse = (data: any, fallback: any = []) => {
     }
     return fallback;
   }
+};
+
+const handleFirestoreError = (res: any, err: any, context: string) => {
+  console.error(`Firestore error in ${context}:`, err);
+  if (err.message && err.message.includes('RESOURCE_EXHAUSTED')) {
+    return res.status(429).json({ error: 'Firestore quota exceeded. Please try again tomorrow.' });
+  }
+  res.status(500).json({ error: err.message });
 };
 
 async function startServer() {
@@ -467,24 +435,8 @@ async function createNotification(userId: string | number, type: string, title: 
   app.post('/api/auth/register', async (req, res) => {
     const { email, password, role, name, company_name, username } = req.body;
     const { db: firestore } = getFirebase();
-
-    if (!email || !password || !role) {
-      return res.status(400).json({ error: 'Email, password and role are required' });
-    }
-
-    if (role !== 'STUDENT' && role !== 'RECRUITER') {
-      return res.status(400).json({ error: 'Invalid role' });
-    }
-
-    if (role === 'STUDENT' && !name) {
-      return res.status(400).json({ error: 'Full name is required for student signup' });
-    }
-
-    if (role === 'RECRUITER' && !company_name) {
-      return res.status(400).json({ error: 'Company name is required for recruiter signup' });
-    }
-
-    const finalUsername = username?.trim() || `${email.split('@')[0]}${Math.floor(Math.random() * 1000)}`;
+    
+    const finalUsername = username || email.split('@')[0] + Math.floor(Math.random() * 1000);
 
     if (!firestore) {
       // Fallback to SQLite if Firebase is not configured
@@ -506,11 +458,7 @@ async function createNotification(userId: string | number, type: string, title: 
         res.cookie('token', token, { httpOnly: true, secure: true, sameSite: 'none', maxAge: THIRTY_DAYS });
         res.json({ user: { id: userId, email, role } });
       } catch (err: any) {
-        const errMsg = String(err?.message || err);
-        if (errMsg.includes('UNIQUE constraint failed') || errMsg.includes('already exists')) {
-          return res.status(400).json({ error: 'User already exists' });
-        }
-        res.status(500).json({ error: errMsg || 'Could not register user' });
+        res.status(400).json({ error: err.message });
       }
       return;
     }
@@ -1422,150 +1370,6 @@ async function createNotification(userId: string | number, type: string, title: 
     }
   });
 
-  app.post('/api/extract-text', authenticate, upload.single('file'), async (req: any, res) => {
-    if (!req.file) {
-      return res.status(400).json({ error: 'No file uploaded' });
-    }
-
-    const filePath = req.file.path;
-
-    try {
-      const dataBuffer = fs.readFileSync(filePath);
-      
-      // Robust pdf-parse usage
-      let resolvedPdfParse = pdfParse;
-      if (typeof resolvedPdfParse !== 'function' && resolvedPdfParse) {
-        if (typeof (resolvedPdfParse as any).default === 'function') {
-          resolvedPdfParse = (resolvedPdfParse as any).default;
-        } else if (typeof (resolvedPdfParse as any).pdf === 'function') {
-          resolvedPdfParse = (resolvedPdfParse as any).pdf;
-        }
-      }
-
-      if (typeof resolvedPdfParse !== 'function') {
-        console.error('[Error] pdfParse is not a function at runtime. Type:', typeof resolvedPdfParse, 'Value:', resolvedPdfParse);
-        throw new Error(`pdfParse is not a function (type: ${typeof resolvedPdfParse}). This usually means the module was not loaded correctly.`);
-      }
-      
-      let data;
-      try {
-        // Try as a function first
-        data = await resolvedPdfParse(dataBuffer);
-      } catch (err: any) {
-        // If it's a class constructor error, try with 'new'
-        if (err instanceof TypeError && err.message.includes("without 'new'")) {
-          console.log('[Runtime] pdfParse seems to be a class, retrying with new...');
-          try {
-            // Some newer versions might be a class
-            const pdfParser = new resolvedPdfParse();
-            data = await pdfParser.parse(dataBuffer);
-          } catch (newErr: any) {
-            // If that also fails, try just new pdfParse(buffer)
-            try {
-              data = await new resolvedPdfParse(dataBuffer);
-            } catch (finalErr: any) {
-              throw err; // Throw original error if both new attempts fail
-            }
-          }
-        } else {
-          throw err;
-        }
-      }
-      
-      if (!data || !data.text || data.text.trim().length === 0) {
-        throw new Error('No text could be extracted from this PDF. Please ensure it is not a scanned image.');
-      }
-      
-      // Clean up the file after extraction
-      if (fs.existsSync(filePath)) {
-        fs.unlinkSync(filePath);
-      }
-      
-      res.json({ text: data.text });
-    } catch (err: any) {
-      console.error('Error extracting text:', err);
-      
-      // Ensure cleanup on error
-      if (fs.existsSync(filePath)) {
-        try {
-          fs.unlinkSync(filePath);
-        } catch (unlinkErr) {
-          console.error('Failed to delete file after error:', unlinkErr);
-        }
-      }
-      
-      res.status(500).json({ error: err.message || 'Failed to extract text from PDF' });
-    }
-  });
-
-  app.post('/api/analyze-resume', authenticate, async (req: any, res) => {
-    const { text } = req.body;
-    const apiKey = process.env.GEMINI_API_KEY;
-
-    if (!apiKey) {
-      return res.status(500).json({ error: 'Gemini API Key is missing on server.' });
-    }
-
-    try {
-      // Use the class with 'new'
-      const ai = new GoogleGenAIClass({ apiKey });
-      const response = await ai.models.generateContent({
-        model: "gemini-3-flash-preview",
-        contents: `Analyze the following resume text and provide a professional evaluation. 
-        Return the result in JSON format with the following structure:
-        {
-          "score": number (0-100),
-          "summary": "brief professional summary",
-          "strengths": ["list", "of", "strengths"],
-          "weaknesses": ["list", "of", "weaknesses"],
-          "missing_skills": ["skills", "that", "could", "be", "added"],
-          "formatting_tips": ["tips", "to", "improve", "layout"],
-          "keywords_to_add": ["important", "keywords", "for", "ATS"],
-          "overall_verdict": "final recommendation"
-        }
-        
-        Resume Text:
-        ${text}`,
-        config: {
-          responseMimeType: "application/json",
-        }
-      });
-
-      const result = JSON.parse(response.text);
-      res.json(result);
-    } catch (err: any) {
-      console.error('Gemini analysis error:', err);
-      res.status(500).json({ error: err.message || 'Failed to analyze resume' });
-    }
-  });
-
-  app.post('/api/resume-analysis', authenticate, async (req: any, res) => {
-    const { resume_name, score, analysis_json } = req.body;
-    try {
-      db.prepare(`
-        INSERT INTO resume_analyses (user_id, resume_name, score, analysis_json)
-        VALUES (?, ?, ?, ?)
-      `).run(req.user.id, resume_name, score, JSON.stringify(analysis_json));
-      res.json({ success: true });
-    } catch (err: any) {
-      res.status(500).json({ error: err.message });
-    }
-  });
-
-  app.get('/api/resume-analyses', authenticate, async (req: any, res) => {
-    try {
-      const analyses = db.prepare(`
-        SELECT * FROM resume_analyses WHERE user_id = ? ORDER BY created_at DESC
-      `).all(req.user.id);
-      res.json(analyses.map((a: any) => ({
-        ...a,
-        analysis_json: JSON.parse(a.analysis_json)
-      })));
-    } catch (err: any) {
-      res.status(500).json({ error: err.message });
-    }
-  });
-
   // Job Endpoints
   app.get('/api/jobs', authenticate, async (req: any, res) => {
     const { db: firestore } = getFirebase();
@@ -1647,7 +1451,7 @@ async function createNotification(userId: string | number, type: string, title: 
       }
       res.json(jobs);
     } catch (err: any) {
-      res.status(500).json({ error: err.message });
+      handleFirestoreError(res, err, '/api/jobs');
     }
   });
 
@@ -2569,8 +2373,7 @@ async function createNotification(userId: string | number, type: string, title: 
 
       res.json(jobs.filter(j => j !== null));
     } catch (err: any) {
-      console.error('Error fetching saved jobs:', err);
-      res.status(500).json({ error: err.message });
+      handleFirestoreError(res, err, '/api/jobs/saved');
     }
   });
 
