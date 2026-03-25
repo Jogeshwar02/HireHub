@@ -349,8 +349,18 @@ async function createNotification(userId: string | number, type: string, title: 
       created_at: new Date().toISOString()
     });
     console.log(`[Notification] Firestore: Created for user ${userId}`);
-  } catch (err) {
-    console.error('Error creating notification:', err);
+  } catch (err: any) {
+    console.error('Error creating notification in Firestore:', err);
+    // Fallback to SQLite if Firestore fails (e.g. quota)
+    try {
+      db.prepare(`
+        INSERT INTO notifications (user_id, type, title, content, link)
+        VALUES (?, ?, ?, ?, ?)
+      `).run(Number(userId), type, title, content, link || null);
+      console.log(`[Notification] Fallback to SQLite: Created for user ${userId}`);
+    } catch (sqliteErr) {
+      console.error('[Notification] Fallback SQLite error:', sqliteErr);
+    }
   }
 }
 
@@ -502,7 +512,7 @@ async function createNotification(userId: string | number, type: string, title: 
       res.cookie('token', token, { httpOnly: true, secure: true, sameSite: 'none', maxAge: THIRTY_DAYS });
       res.json({ user: { id: userRef.id, email, role } });
     } catch (err: any) {
-      res.status(400).json({ error: err.message });
+      handleFirestoreError(res, err, '/api/auth/register');
     }
   });
 
@@ -541,7 +551,7 @@ async function createNotification(userId: string | number, type: string, title: 
       res.cookie('token', token, { httpOnly: true, secure: true, sameSite: 'none', maxAge: THIRTY_DAYS });
       res.json({ user: { id: userDoc.id, email: userData.email, role: userData.role, username: userData.username } });
     } catch (err: any) {
-      res.status(400).json({ error: err.message });
+      handleFirestoreError(res, err, '/api/auth/login');
     }
   });
 
@@ -1064,11 +1074,10 @@ async function createNotification(userId: string | number, type: string, title: 
           }
         }
       }
-    } catch (err) {
-      console.error('Error fetching name for /me:', err);
+      res.json({ user: { ...req.user, name, profile_picture_url } });
+    } catch (err: any) {
+      handleFirestoreError(res, err, '/api/auth/me');
     }
-
-    res.json({ user: { ...req.user, name, profile_picture_url } });
   });
 
   // File Upload Endpoint
@@ -1365,8 +1374,7 @@ async function createNotification(userId: string | number, type: string, title: 
       }
       res.json({ success: true });
     } catch (err: any) {
-      console.error('Profile update error:', err);
-      res.status(500).json({ error: err.message });
+      handleFirestoreError(res, err, '/api/profile');
     }
   });
 

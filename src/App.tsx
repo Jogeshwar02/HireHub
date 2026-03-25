@@ -401,6 +401,7 @@ export default function App() {
             {view === 'profile' && (
               <ProfileView 
                 user={user} 
+                setToast={setToast}
                 onUpdate={() => {
                   checkAuth();
                   if (isFirstTime) {
@@ -2326,7 +2327,7 @@ function ApplicationsView({ user, viewParams }: { user: UserType; viewParams?: a
 
 // --- Profile View ---
 
-function ProfileView({ user, onUpdate }: { user: UserType; onUpdate: () => void }) {
+function ProfileView({ user, onUpdate, setToast }: { user: UserType; onUpdate: () => void; setToast: (toast: any) => void }) {
   const [profile, setProfile] = useState<any>(null);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
@@ -2368,9 +2369,10 @@ function ProfileView({ user, onUpdate }: { user: UserType; onUpdate: () => void 
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify(updatedProfile),
         });
+        setToast({ title: 'Image Uploaded', content: 'Your profile picture has been updated.' });
       }
     } catch (err) {
-      alert('Failed to upload image');
+      setToast({ title: 'Upload Failed', content: 'Failed to upload image. Please try again.' });
     } finally {
       setUploading(false);
     }
@@ -2387,13 +2389,13 @@ function ProfileView({ user, onUpdate }: { user: UserType; onUpdate: () => void 
       });
       if (res.ok) {
         onUpdate();
-        alert('Profile updated successfully!');
+        setToast({ title: 'Profile Updated', content: 'Your profile settings have been saved.' });
       } else {
         const data = await res.json();
-        alert(data.error || 'Failed to update profile');
+        setToast({ title: 'Update Failed', content: data.error || 'Failed to update profile' });
       }
     } catch (err) {
-      alert('An error occurred while saving your profile');
+      setToast({ title: 'Error', content: 'An error occurred while saving your profile' });
     } finally {
       setSaving(false);
     }
