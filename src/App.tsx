@@ -83,6 +83,16 @@ const Badge = ({ children, variant = 'neutral', ...props }: { children?: React.R
   return <span className={cn('px-2 py-0.5 rounded-full text-xs font-semibold', variants[variant])}>{children}</span>;
 };
 
+const ensureAbsoluteUrl = (url: string) => {
+  if (!url) return '';
+  const trimmed = url.trim();
+  if (!trimmed) return '';
+  if (trimmed.startsWith('http://') || trimmed.startsWith('https://')) return trimmed;
+  if (trimmed.startsWith('//')) return `https:${trimmed}`;
+  if (trimmed.startsWith('/')) return trimmed; // Keep relative paths as is
+  return `https://${trimmed}`;
+};
+
 const LoadingPage = () => (
   <div className="h-screen w-full flex flex-col items-center justify-center bg-[#F9F9F9]">
     <motion.div 
@@ -228,6 +238,11 @@ export default function App() {
     }
   };
 
+  const changeView = (newView: string) => {
+    setView(newView);
+    setViewParams(null);
+  };
+
   const handleNavigate = (link: string) => {
     if (link.startsWith('/jobs')) setView('jobs');
     if (link.startsWith('/applications')) {
@@ -318,16 +333,16 @@ export default function App() {
             HireHub
           </h1>
           <div className="hidden md:flex items-center gap-1">
-            <NavButton active={view === 'dashboard'} onClick={() => setView('dashboard')} icon={<BarChart3 size={18} />}>Dashboard</NavButton>
-            <NavButton active={view === 'jobs'} onClick={() => setView('jobs')} icon={<Briefcase size={18} />}>Jobs</NavButton>
-            <NavButton active={view === 'network'} onClick={() => setView('network')} icon={<Users size={18} />}>Network</NavButton>
+            <NavButton active={view === 'dashboard'} onClick={() => changeView('dashboard')} icon={<BarChart3 size={18} />}>Dashboard</NavButton>
+            <NavButton active={view === 'jobs'} onClick={() => changeView('jobs')} icon={<Briefcase size={18} />}>Jobs</NavButton>
+            <NavButton active={view === 'network'} onClick={() => changeView('network')} icon={<Users size={18} />}>Network</NavButton>
             {user.role === 'STUDENT' && (
-              <NavButton active={view === 'saved'} onClick={() => setView('saved')} icon={<Bookmark size={18} />}>Saved</NavButton>
+              <NavButton active={view === 'saved'} onClick={() => changeView('saved')} icon={<Bookmark size={18} />}>Saved</NavButton>
             )}
-            <NavButton active={view === 'applications'} onClick={() => setView('applications')} icon={<FileText size={18} />}>Applications</NavButton>
-            <NavButton active={view === 'interviews'} onClick={() => setView('interviews')} icon={<Calendar size={18} />}>Interviews</NavButton>
+            <NavButton active={view === 'applications'} onClick={() => changeView('applications')} icon={<FileText size={18} />}>Applications</NavButton>
+            <NavButton active={view === 'interviews'} onClick={() => changeView('interviews')} icon={<Calendar size={18} />}>Interviews</NavButton>
             {user.role === 'ADMIN' && (
-              <NavButton active={view === 'admin'} onClick={() => setView('admin')} icon={<Shield size={18} />}>Admin</NavButton>
+              <NavButton active={view === 'admin'} onClick={() => changeView('admin')} icon={<Shield size={18} />}>Admin</NavButton>
             )}
           </div>
         </div>
@@ -418,15 +433,15 @@ export default function App() {
 
       {/* Mobile Bottom Navigation */}
       <nav className="md:hidden fixed bottom-0 left-0 right-0 bg-white border-t border-zinc-100 flex items-center justify-around py-3 px-4 z-50 shadow-[0_-4px_10px_rgba(0,0,0,0.02)]">
-        <MobileNavButton active={view === 'dashboard'} onClick={() => setView('dashboard')} icon={<BarChart3 size={20} />} label="Home" />
+        <MobileNavButton active={view === 'dashboard'} onClick={() => changeView('dashboard')} icon={<BarChart3 size={20} />} label="Home" />
         {user.role === 'STUDENT' && (
-          <MobileNavButton active={view === 'saved'} onClick={() => setView('saved')} icon={<Bookmark size={20} />} label="Saved" />
+          <MobileNavButton active={view === 'saved'} onClick={() => changeView('saved')} icon={<Bookmark size={20} />} label="Saved" />
         )}
-        <MobileNavButton active={view === 'jobs'} onClick={() => setView('jobs')} icon={<Briefcase size={20} />} label="Jobs" />
-        <MobileNavButton active={view === 'network'} onClick={() => setView('network')} icon={<Users size={20} />} label="Network" />
-        <MobileNavButton active={view === 'applications'} onClick={() => setView('applications')} icon={<FileText size={20} />} label="Apps" />
-        <MobileNavButton active={view === 'interviews'} onClick={() => setView('interviews')} icon={<Calendar size={20} />} label="Events" />
-        <MobileNavButton active={view === 'profile'} onClick={() => setView('profile')} icon={<User size={20} />} label="Profile" />
+        <MobileNavButton active={view === 'jobs'} onClick={() => changeView('jobs')} icon={<Briefcase size={20} />} label="Jobs" />
+        <MobileNavButton active={view === 'network'} onClick={() => changeView('network')} icon={<Users size={20} />} label="Network" />
+        <MobileNavButton active={view === 'applications'} onClick={() => changeView('applications')} icon={<FileText size={20} />} label="Apps" />
+        <MobileNavButton active={view === 'interviews'} onClick={() => changeView('interviews')} icon={<Calendar size={20} />} label="Events" />
+        <MobileNavButton active={view === 'profile'} onClick={() => changeView('profile')} icon={<User size={20} />} label="Profile" />
       </nav>
     </div>
   );
@@ -1954,15 +1969,17 @@ function InterviewsView({ user }: { user: UserType }) {
               </p>
 
               <div className="space-y-3">
-                <a 
-                  href={interview.meeting_link} 
-                  target="_blank" 
-                  rel="noopener noreferrer"
-                  className="flex items-center gap-2 p-3 bg-zinc-50 rounded-xl text-sm font-medium hover:bg-zinc-100 transition-all text-blue-600"
-                >
-                  <Video size={18} />
-                  Join Meeting
-                </a>
+                {interview.meeting_link && (
+                  <a 
+                    href={ensureAbsoluteUrl(interview.meeting_link)} 
+                    target="_blank" 
+                    rel="noopener noreferrer"
+                    className="flex items-center gap-2 p-3 bg-zinc-50 rounded-xl text-sm font-medium hover:bg-zinc-100 transition-all text-blue-600"
+                  >
+                    <Video size={18} />
+                    Join Meeting
+                  </a>
+                )}
                 
                 {interview.notes && (
                   <p className="text-xs text-zinc-500 italic line-clamp-2" title={interview.notes}>
@@ -2103,18 +2120,18 @@ function StudentProfileModal({ studentId, onClose }: { studentId: string; onClos
                 </div>
 
                 <div className="flex gap-4 pt-4 border-t border-zinc-100">
-                  {profile.linkedin_url && (
-                    <a href={profile.linkedin_url} target="_blank" rel="noopener noreferrer" className="p-2 bg-zinc-100 rounded-lg hover:bg-zinc-200 transition-colors">
+                  {profile.linkedin_url?.trim() && (
+                    <a href={ensureAbsoluteUrl(profile.linkedin_url)} target="_blank" rel="noopener noreferrer" className="p-2 bg-zinc-100 rounded-lg hover:bg-zinc-200 transition-colors">
                       <Linkedin size={20} className="text-blue-600" />
                     </a>
                   )}
-                  {profile.github_url && (
-                    <a href={profile.github_url} target="_blank" rel="noopener noreferrer" className="p-2 bg-zinc-100 rounded-lg hover:bg-zinc-200 transition-colors">
+                  {profile.github_url?.trim() && (
+                    <a href={ensureAbsoluteUrl(profile.github_url)} target="_blank" rel="noopener noreferrer" className="p-2 bg-zinc-100 rounded-lg hover:bg-zinc-200 transition-colors">
                       <Github size={20} />
                     </a>
                   )}
-                  {profile.portfolio_url && (
-                    <a href={profile.portfolio_url} target="_blank" rel="noopener noreferrer" className="p-2 bg-zinc-100 rounded-lg hover:bg-zinc-200 transition-colors">
+                  {profile.portfolio_url?.trim() && (
+                    <a href={ensureAbsoluteUrl(profile.portfolio_url)} target="_blank" rel="noopener noreferrer" className="p-2 bg-zinc-100 rounded-lg hover:bg-zinc-200 transition-colors">
                       <Globe size={20} className="text-emerald-600" />
                     </a>
                   )}
@@ -2136,19 +2153,21 @@ function ApplicationsView({ user, viewParams }: { user: UserType; viewParams?: a
   const [selectedChat, setSelectedChat] = useState<Application | null>(null);
   const [schedulingInterview, setSchedulingInterview] = useState<Application | null>(null);
   const [viewingStudentId, setViewingStudentId] = useState<string | null>(null);
+  const [processedAppId, setProcessedAppId] = useState<string | null>(null);
 
   useEffect(() => {
     fetchApps();
   }, []);
 
   useEffect(() => {
-    if (viewParams?.applicationId && apps.length > 0) {
+    if (viewParams?.applicationId && apps.length > 0 && processedAppId !== viewParams.applicationId) {
       const app = apps.find(a => String(a.id) === String(viewParams.applicationId));
       if (app) {
         setSelectedChat(app);
+        setProcessedAppId(viewParams.applicationId);
       }
     }
-  }, [viewParams, apps]);
+  }, [viewParams, apps, processedAppId]);
 
   const fetchApps = async () => {
     setLoading(true);
@@ -2230,7 +2249,6 @@ function ApplicationsView({ user, viewParams }: { user: UserType; viewParams?: a
                       href={app.resume_url} 
                       target="_blank" 
                       rel="noopener noreferrer"
-                      download={app.resume_url.split('/').pop()}
                       className="inline-flex items-center gap-1 text-xs font-bold text-zinc-400 hover:text-black transition-colors uppercase"
                     >
                       <FileText size={14} />

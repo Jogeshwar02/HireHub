@@ -9,7 +9,7 @@ import cookieParser from 'cookie-parser';
 import dotenv from 'dotenv';
 import multer from 'multer';
 import fs from 'fs';
-import { getFirebase } from './firebaseAdmin.js';
+import { getFirebase } from './firebaseAdmin.ts';
 
 dotenv.config();
 
@@ -261,60 +261,85 @@ async function startServer() {
     
     console.log(`[Serve] Request for: ${filename}`);
     
-    // 1. Try serving from local disk
-    if (fs.existsSync(filePath)) {
-      res.setHeader('Content-Type', 'application/pdf');
-      res.setHeader('Content-Disposition', 'inline');
-      return res.sendFile(filePath, (err) => {
-        if (err) {
-          console.error(`[Serve] Error sending ${filePath}:`, err);
-          if (!res.headersSent) {
-            res.status(500).send('Error serving file');
-          }
-        }
-      });
-    } 
-    
-    // 2. Try serving from SQLite Database (Persistent Backup)
     try {
+      // Helper to determine mimetype
+      const getMimetype = (ext: string, dbMime?: string) => {
+        if (dbMime) return dbMime;
+        const mimeMap: Record<string, string> = {
+          '.pdf': 'application/pdf',
+          '.jpg': 'image/jpeg',
+          '.jpeg': 'image/jpeg',
+          '.png': 'image/png',
+          '.gif': 'image/gif',
+          '.webp': 'image/webp'
+        };
+        return mimeMap[ext.toLowerCase()] || 'application/octet-stream';
+      };
+
+      const ext = path.extname(filename);
+
+      // 1. Try serving from local disk
+      if (fs.existsSync(filePath)) {
+        let mimetype = getMimetype(ext);
+        try {
+          const fileRecord = db.prepare('SELECT mimetype FROM files WHERE id = ?').get(filename);
+          if (fileRecord?.mimetype) mimetype = fileRecord.mimetype;
+        } catch (e) {}
+        
+        res.setHeader('Content-Type', mimetype);
+        res.setHeader('Content-Disposition', 'inline');
+        return res.sendFile(filePath, (err) => {
+          if (err && !res.headersSent) {
+            console.error(`[Serve] Error sending ${filePath}:`, err);
+            res.status(500).setHeader('Content-Type', 'text/plain').send('Error serving file');
+          }
+        });
+      } 
+      
+      // 2. Try serving from SQLite Database (Persistent Backup)
       const file = db.prepare('SELECT * FROM files WHERE id = ?').get(filename);
       if (file) {
         console.log(`[Serve] Serving ${filename} from SQLite database`);
-        res.setHeader('Content-Type', file.mimetype || 'application/pdf');
+        res.setHeader('Content-Type', file.mimetype || getMimetype(ext));
         res.setHeader('Content-Disposition', 'inline');
         return res.send(file.data);
       }
-    } catch (dbErr) {
-      console.error(`[Serve] SQLite error for ${filename}:`, dbErr);
-    }
 
-    // 3. Try serving from Firestore (Cloud Run Persistent Backup)
-    try {
+      // 3. Try serving from Firestore (Cloud Run Persistent Backup)
       const { db: firestore } = getFirebase();
       if (firestore) {
         const doc = await firestore.collection('files').doc(filename).get();
         if (doc.exists) {
           const data = doc.data();
           console.log(`[Serve] Serving ${filename} from Firestore`);
-          res.setHeader('Content-Type', data?.mimetype || 'application/pdf');
+          res.setHeader('Content-Type', data?.mimetype || getMimetype(ext));
           res.setHeader('Content-Disposition', 'inline');
-          return res.send(Buffer.from(data?.data, 'base64'));
+          if (data?.data) {
+            return res.send(Buffer.from(data.data, 'base64'));
+          }
         }
       }
-    } catch (fsErr) {
-      console.error(`[Serve] Firestore error for ${filename}:`, fsErr);
-    }
 
-    // 4. Check fallback path
-    const fallbackPath = path.join(process.cwd(), 'uploads', filename);
-    if (fs.existsSync(fallbackPath)) {
-      res.setHeader('Content-Type', 'application/pdf');
-      res.setHeader('Content-Disposition', 'inline');
-      return res.sendFile(fallbackPath);
-    }
+      // 4. Check fallback path
+      const fallbackPath = path.join(process.cwd(), 'uploads', filename);
+      if (fs.existsSync(fallbackPath)) {
+        res.setHeader('Content-Type', getMimetype(ext));
+        res.setHeader('Content-Disposition', 'inline');
+        return res.sendFile(fallbackPath, (err) => {
+          if (err && !res.headersSent) {
+            res.status(500).setHeader('Content-Type', 'text/plain').send('Error serving file');
+          }
+        });
+      }
 
-    console.error(`[Serve] File NOT FOUND: ${filename}`);
-    res.status(404).send('File not found');
+      console.error(`[Serve] File NOT FOUND: ${filename}`);
+      res.status(404).setHeader('Content-Type', 'text/plain').send('File not found');
+    } catch (err: any) {
+      console.error(`[Serve] Error serving ${filename}:`, err);
+      if (!res.headersSent) {
+        res.status(500).setHeader('Content-Type', 'text/plain').send('Error serving file');
+      }
+    }
   });
 
   // Helper to create notifications
